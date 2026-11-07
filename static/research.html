@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="app-version" content="__APP_VERSION__" />
+  <title>科研星舰 · P1 受控记忆</title>
+  <link rel="stylesheet" href="/static/research.css?v=__APP_VERSION__" />
+  <script type="module" src="/static/research.js?v=__APP_VERSION__"></script>
+</head>
+<body>
+  <a class="skip" href="#workspace">跳到工作区</a>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">研</span><div><h1>科研星舰</h1><p>P1 · 教程与受控记忆</p></div></div>
+    <div class="privacy-note"><span class="status-dot"></span>本地解析 · 人工审核 · 默认课题隔离</div>
+    <a class="text-link" href="/">普通 Personal Agent</a>
+  </header>
+
+  <main id="workspace" class="shell">
+    <aside class="sidebar" aria-label="课题导航">
+      <div class="section-heading"><h2>我的课题</h2><button id="newProjectButton" class="icon-button" aria-label="新建课题">＋</button></div>
+      <form id="projectForm" class="compact-form" hidden>
+        <label>课题名称<input id="projectName" maxlength="120" required placeholder="例如：Agent 教程验证" /></label>
+        <label>研究目标<textarea id="projectGoal" rows="2" placeholder="可选"></textarea></label>
+        <div class="button-row"><button class="primary" type="submit">创建</button><button id="cancelProject" type="button">取消</button></div>
+      </form>
+      <nav id="projectList" class="project-list" aria-label="课题列表"></nav>
+      <section class="scope-card">
+        <h3>当前检索范围</h3>
+        <p id="scopeDescription">尚未选择课题</p>
+        <div id="crossProjectList"></div>
+      </section>
+      <section class="boundary-card">
+        <strong>P1 边界</strong>
+        <p>仅支持 Markdown 教程。未实现论文解析、OCR、神经向量、实验或 LaTeX 闭环。</p>
+      </section>
+    </aside>
+
+    <section class="main-column">
+      <div class="workspace-heading"><div><p class="eyebrow">当前课题</p><h2 id="currentProject">请先创建课题</h2><p id="projectMeta"></p></div><button id="newConversationButton" type="button" disabled>新会话</button></div>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <section class="panel import-panel" aria-labelledby="importTitle">
+        <div class="panel-heading"><div><span class="step">01</span><h3 id="importTitle">导入与预览</h3></div><span class="tag">原件不改写，系统另存副本</span></div>
+        <form id="uploadForm" class="upload-form">
+          <label class="file-picker"><span>选择 Markdown 文件</span><input id="fileInput" type="file" accept=".md,.markdown,text/markdown" required /></label>
+          <label>资料等级<select id="confidentiality"><option value="L1">L1 公开</option><option value="L2" selected>L2 内部（默认）</option><option value="L3">L3 保密</option></select></label>
+          <button class="primary" type="submit">本地解析并预览</button>
+        </form>
+      </section>
+
+      <section class="panel documents-panel" aria-labelledby="documentsTitle">
+        <div class="panel-heading"><div><span class="step">02</span><h3 id="documentsTitle">资料与人工审核</h3></div><span id="memoryCount" class="tag">0 条正式记忆</span></div>
+        <div class="document-layout">
+          <div id="documentList" class="document-list"><p class="empty">暂无资料。导入后只会进入待审状态。</p></div>
+          <article id="documentPreview" class="document-preview" hidden>
+            <div class="preview-heading"><div><h4 id="documentTitle"></h4><p id="documentInfo"></p></div><span id="documentStatus" class="status-badge"></span></div>
+            <div class="tabs" role="tablist" aria-label="资料预览">
+              <button class="tab active" data-tab="source" role="tab" aria-selected="true">原文</button>
+              <button class="tab" data-tab="parsed" role="tab" aria-selected="false">解析结果</button>
+              <button class="tab" data-tab="sources" role="tab" aria-selected="false">来源</button>
+            </div>
+            <pre id="previewContent" class="preview-content" tabindex="0"></pre>
+            <div class="review-actions"><button id="approveDocument" class="primary">确认写入正式记忆</button><button id="rejectDocument" class="danger">拒绝入库</button><span id="reviewHint"></span></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel chat-panel" aria-labelledby="chatTitle">
+        <div class="panel-heading"><div><span class="step">03</span><h3 id="chatTitle">新会话带来源提问</h3></div><span id="conversationLabel" class="tag">尚未开始</span></div>
+        <div id="chatLog" class="chat-log" role="log" aria-live="polite"><p class="empty">确认资料后，可在这里验证跨会话检索。没有命中时会明确说明。</p></div>
+        <form id="chatForm" class="chat-form">
+          <label for="question">你的问题</label>
+          <textarea id="question" rows="3" required placeholder="例如：资料什么时候进入正式资料库？"></textarea>
+          <div class="chat-options">
+            <label>处理通道<select id="provider"><option value="local">本地证据摘录（默认）</option><option value="external">外部模型（须配置并审批）</option></select></label>
+            <label id="modelField" hidden>外部模型<input id="modelId" placeholder="模型配置 ID" /></label>
+            <label>检索词等级<select id="queryLevel"><option value="L1">L1</option><option value="L2">L2</option><option value="L3">L3</option></select></label>
+            <button id="sendQuestion" class="primary" type="submit">提问</button>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="approvalDialog" aria-labelledby="approvalTitle">
+    <form method="dialog" class="dialog-shell">
+      <div class="panel-heading"><h2 id="approvalTitle">L2 外发审批</h2><button value="cancel" aria-label="关闭">×</button></div>
+      <p class="warning">请核对实际接收方、用途、材料片段和版本。批准仅覆盖本次范围，变化后须重新审批。</p>
+      <dl id="approvalMeta" class="approval-meta"></dl>
+      <div id="approvalFragments" class="approval-fragments"></div>
+      <div class="button-row"><button id="confirmOutbound" value="default" class="primary">批准并发送一次</button><button value="cancel">取消，不外发</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
