@@ -4,157 +4,178 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="app-version" content="__APP_VERSION__" />
-  <title>科研星舰 · P4 科研质量与发布验收</title>
+  <title>科研星舰</title>
   <link rel="stylesheet" href="/static/research.css?v=__APP_VERSION__" />
   <script type="module" src="/static/research.js?v=__APP_VERSION__"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">跳到工作区</a>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">研</span><div><h1>科研星舰</h1><p>P4 · 科研质量与交付</p></div></div>
-    <div class="privacy-note"><span class="status-dot"></span>本地 RAG · 人工审核 · 默认课题隔离</div>
-    <a class="text-link" href="/">普通 Personal Agent</a>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">研</span><h1>科研星舰</h1></div>
+    <label class="topbar-project" for="projectSwitcher"><span>当前课题</span><select id="projectSwitcher" aria-label="切换当前课题" disabled></select></label>
+    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><p>资料、问答、备份和恢复任务可在文件接收完成后刷新查看。处理中的外部请求与恢复不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div></div></details>
+    <button id="dataManagementShortcut" class="quiet-button" type="button">数据管理</button>
   </header>
 
-  <main id="workspace" class="shell">
-    <aside class="sidebar" aria-label="课题导航">
-      <div class="section-heading"><h2>我的课题</h2><button id="newProjectButton" class="icon-button" aria-label="新建课题">＋</button></div>
-      <form id="projectForm" class="compact-form" hidden>
-        <label>课题名称<input id="projectName" maxlength="120" required placeholder="例如：Agent 教程验证" /></label>
-        <label>研究目标<textarea id="projectGoal" rows="2" placeholder="可选"></textarea></label>
-        <div class="button-row"><button class="primary" type="submit">创建</button><button id="cancelProject" type="button">取消</button></div>
-      </form>
-      <nav id="projectList" class="project-list" aria-label="课题列表"></nav>
-      <section class="scope-card">
-        <h3>当前检索范围</h3>
-        <p id="scopeDescription">尚未选择课题</p>
-        <div id="crossProjectList"></div>
+  <main class="shell">
+    <aside class="sidebar" aria-label="科研工作区导航">
+      <nav class="primary-nav" aria-label="工作区">
+        <button class="nav-item active" type="button" data-view-target="library" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11v16H6.5A2.5 2.5 0 0 0 4 21.5zM20 5.5A2.5 2.5 0 0 0 17.5 3H13v16h4.5a2.5 2.5 0 0 1 2.5 2.5z"/></svg>
+          <span>资料库</span>
+        </button>
+        <button class="nav-item" type="button" data-view-target="review">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h10M9 12h10M9 19h10M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg>
+          <span>待我确认</span><span id="pendingNavCount" class="nav-count" aria-label="0 项待确认">0</span>
+        </button>
+        <button class="nav-item" type="button" data-view-target="chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3z"/></svg>
+          <span>课题问答</span>
+        </button>
+        <button class="nav-item" type="button" data-view-target="data">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg>
+          <span>数据管理</span>
+        </button>
+      </nav>
+
+      <section class="project-card" aria-labelledby="currentProject">
+        <div class="section-heading"><span class="section-label">正在研究</span><button id="newProjectButton" class="small-button" type="button">新建课题</button></div>
+        <h2 id="currentProject">请先创建课题</h2>
+        <p id="projectMeta">每个课题的资料、审核与记忆独立保存。</p>
+        <form id="projectForm" class="compact-form" hidden>
+          <label>课题名称<input id="projectName" maxlength="120" required placeholder="例如：Agent 教程验证" /></label>
+          <details><summary>补充研究目标（可选）</summary><label>研究目标<textarea id="projectGoal" rows="2" placeholder="可以稍后再补充"></textarea></label></details>
+          <div class="button-row"><button class="primary" type="submit">创建课题</button><button id="cancelProject" type="button">取消</button></div>
+        </form>
       </section>
-      <section class="boundary-card">
-        <strong>P4 边界</strong>
-        <p>支持批次、冲突、版本、撤销、回收站和备份。局部写作与引用须通过校验；发布状态以真实验收记录为准。</p>
-      </section>
+      <p class="local-note"><span class="status-dot" aria-hidden="true"></span>资料默认保存在本机，外发前会说明并请求确认。</p>
     </aside>
 
-    <section class="main-column">
-      <div class="workspace-heading"><div><p class="eyebrow">当前课题</p><h2 id="currentProject">请先创建课题</h2><p id="projectMeta"></p></div><button id="newConversationButton" type="button" disabled>新会话</button></div>
+    <section id="workspace" class="main-column" tabindex="-1">
+      <header class="workspace-heading">
+        <div><p id="viewEyebrow" class="eyebrow">你的研究资料</p><h2 id="viewTitle" tabindex="-1">资料库</h2><p id="viewDescription">导入、阅读并整理当前课题的资料。</p></div>
+        <div class="workspace-actions">
+          <button id="batchPending" type="button" hidden>处理全部待确认资料</button>
+          <button id="newConversationButton" type="button" disabled hidden>新会话</button>
+          <button id="refreshGovernance" type="button" hidden>刷新数据状态</button>
+        </div>
+      </header>
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <div id="receipt" class="receipt" hidden><span id="receiptText" role="status" aria-live="polite" aria-atomic="true"></span><button id="dismissReceipt" class="quiet-button" type="button" aria-label="关闭操作回执">关闭</button></div>
 
-      <section class="panel import-panel" aria-labelledby="importTitle">
-        <div class="panel-heading"><div><span class="step">01</span><h3 id="importTitle">导入与预览</h3></div><span class="tag">原件不改写，系统另存副本</span></div>
-        <form id="uploadForm" class="upload-form">
-          <label class="file-picker"><span>选择研究资料</span><input id="fileInput" type="file" accept=".pdf,.docx,.md,.markdown,.tex,.csv,.html,.htm" required /></label>
-          <label>资料类型<select id="documentType"><option value="paper">论文/研究资料</option><option value="tutorial">教程</option><option value="repository">仓库资料</option></select></label>
-          <label>资料保密程度<select id="confidentiality"><option value="L1">公开资料：可使用已启用的外部服务</option><option value="L2" selected>内部资料（默认）：外发前需确认</option><option value="L3">保密资料：仅本机处理</option></select></label>
-          <label>切块方式<select id="chunkingStrategy"><option value="auto">自动：父子 + 递归（推荐）</option><option value="recursive">仅递归切块</option><option value="fixed">固定长度（兜底）</option><option value="semantic">语义切块（本地模型）</option></select></label>
-          <button class="primary" type="submit">上传并自动分析</button>
-        </form>
-      </section>
+      <div id="libraryView" data-view="library">
+        <section class="panel import-panel" aria-labelledby="importTitle">
+          <div class="panel-heading"><div><h3 id="importTitle">添加资料</h3><p>默认按论文读取并自动整理，原件不会被改写。</p></div><span class="tag">PDF、DOCX、Markdown、TeX、CSV、HTML</span></div>
+          <form id="uploadForm" class="upload-form">
+            <label class="file-picker"><span>选择研究资料</span><input id="fileInput" type="file" accept=".pdf,.docx,.md,.markdown,.tex,.csv,.html,.htm" required /></label>
+            <label>资料保密程度<select id="confidentiality"><option value="L1">公开资料：可使用已启用的外部服务</option><option value="L2" selected>内部资料（默认）：外发前需确认</option><option value="L3">保密资料：仅本机处理</option></select></label>
+            <button class="primary" type="submit">上传并自动分析</button>
+            <details class="advanced-settings"><summary>高级设置</summary><div class="advanced-grid"><label>资料类型<select id="documentType"><option value="paper">论文/研究资料</option><option value="tutorial">教程</option><option value="repository">仓库资料</option></select></label><label>内容拆分方式<select id="chunkingStrategy"><option value="auto">自动处理（推荐）</option><option value="recursive">按段落递归拆分</option><option value="fixed">按固定长度拆分</option><option value="semantic">按语义拆分（本机处理）</option></select></label></div></details>
+          </form>
+          <details class="external-sources"><summary>从 arXiv 或 GitHub 添加公开资料</summary><div class="source-grid"><form id="arxivForm" class="source-form"><h4>检索 arXiv</h4><label>关键词<input id="arxivQuery" placeholder="例如：transformer" required /></label><button type="submit">检索候选</button><div id="arxivCandidates" class="candidate-list" tabindex="-1" aria-label="论文检索结果"></div></form><form id="githubForm" class="source-form"><h4>读取 GitHub 固定版本</h4><label>仓库<input id="githubRepo" placeholder="owner/repository" required /></label><label>指定文件（可选，逗号分隔）<input id="githubPaths" placeholder="README.md,pyproject.toml" /></label><button type="submit">只读导入</button></form></div></details>
+        </section>
 
-      <section class="panel documents-panel" aria-labelledby="documentsTitle">
-        <div class="panel-heading"><div><span class="step">02</span><h3 id="documentsTitle">资料与人工审核</h3></div><span id="memoryCount" class="tag">0 条正式记忆</span></div>
-        <div class="document-layout">
-          <div id="documentList" class="document-list"><p class="empty">暂无资料。导入后只会进入待审状态。</p></div>
-          <article id="documentPreview" class="document-preview" hidden>
-            <div class="preview-heading"><div><h4 id="documentTitle"></h4><p id="documentInfo"></p></div><span id="documentStatus" class="status-badge"></span></div>
-            <div class="tabs" role="tablist" aria-label="资料预览">
-              <button class="tab active" data-tab="source" role="tab" aria-selected="true">原文</button>
-              <button class="tab" data-tab="parsed" role="tab" aria-selected="false">解析结果</button>
-              <button class="tab" data-tab="analysis" role="tab" aria-selected="false">论文分析</button>
-              <button class="tab" data-tab="raw" role="tab" aria-selected="false">原始模型输出</button>
-              <button class="tab" data-tab="sources" role="tab" aria-selected="false">来源</button>
+        <section class="panel documents-panel" aria-labelledby="documentsTitle">
+          <div class="panel-heading"><div><h3 id="documentsTitle">当前课题资料</h3><p>选择一份资料，查看内容、来源和确认状态。</p></div><span id="memoryCount" class="tag">0 条正式记忆</span></div>
+          <div class="document-layout">
+            <div id="documentList" class="document-list"><p class="empty">暂无资料。上传后只会进入待确认状态。</p></div>
+            <div id="libraryPreviewMount" class="preview-mount">
+              <article id="documentPreview" class="document-preview" hidden>
+                <div class="preview-heading"><div><h4 id="documentTitle" tabindex="-1"></h4><p id="documentInfo"></p></div><span id="documentStatus" class="status-badge"></span></div>
+                <div id="paperWorkspace" class="paper-workspace"><div id="paperSourcePane" class="paper-source" hidden><p id="highlightStatus" role="status">选择字段查看对应原文。</p><img id="highlightImage" alt="原文高亮页面" hidden><iframe id="pdfPreview" class="pdf-preview" title="原始 PDF 预览" hidden></iframe><pre id="paperText" class="preview-content" hidden></pre></div><div class="paper-details">
+                <div class="tabs" role="tablist" aria-label="资料内容">
+                  <button class="tab" id="tab-analysis" data-tab="analysis" role="tab" aria-controls="previewPanel" tabindex="-1" aria-selected="false" type="button">核心内容</button>
+                  <button class="tab active" id="tab-source" data-tab="source" role="tab" aria-controls="previewPanel" aria-selected="true" type="button">原文</button>
+                  <button class="tab" id="tab-sources" data-tab="sources" role="tab" aria-controls="previewPanel" tabindex="-1" aria-selected="false" type="button">来源</button>
+                </div>
+                <details id="diagnostics" class="diagnostics"><summary>诊断与原始输出</summary><div class="diagnostic-actions"><button data-tab="parsed" type="button">解析结果</button><button data-tab="raw" type="button">原始模型输出</button></div></details>
+                <div id="previewPanel" role="tabpanel" aria-labelledby="tab-source"><pre id="previewContent" class="preview-content" tabindex="0"></pre>
+                <section id="analysisReviewQueue" class="analysis-review-queue" hidden aria-label="需要核对的字段"></section>
+                <div id="analysisEditor" class="analysis-editor" hidden></div></div>
+                <details id="paperQuestionPanel"><summary>课题问答</summary><p>检索当前课题中已确认的资料；未确认的资料不会参与回答。</p><form id="paperQuestionForm"><label for="paperQuestion">你的问题</label><textarea id="paperQuestion" rows="2" required placeholder="例如：这篇论文使用了什么方法？"></textarea><button type="submit">查找依据</button></form><div id="paperQuestionResult" role="status"></div></details>
+                <div class="review-actions">
+                  <button id="approveDocument" class="primary" type="button">确认并保存</button>
+                  <button id="rejectDocument" class="danger" type="button">不保存这份资料</button>
+                  <button id="analyzeDocument" type="button">重新分析</button>
+                  <button id="saveAnalysis" type="button">保存字段修正</button>
+                  <button id="ocrDocument" type="button">本地文字识别</button>
+                  <span id="reviewHint"></span>
+                </div>
+                </div></div>
+              </article>
             </div>
-            <pre id="previewContent" class="preview-content" tabindex="0"></pre>
-            <iframe id="pdfPreview" class="pdf-preview" title="原始 PDF 预览" hidden></iframe>
-            <div id="analysisEditor" class="analysis-editor" hidden></div>
-            <div class="review-actions">
-              <button id="approveDocument" class="primary">确认写入正式记忆</button>
-              <button id="rejectDocument" class="danger">拒绝入库</button>
-              <button id="analyzeDocument">本地结构化分析</button>
-              <button id="saveAnalysis">保存字段修正</button>
-              <button id="ocrDocument">本地 OCR</button>
-              <span id="reviewHint"></span>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section class="panel chat-panel" aria-labelledby="chatTitle">
-        <div class="panel-heading"><div><span class="step">03</span><h3 id="chatTitle">新会话带来源提问</h3></div><span id="conversationLabel" class="tag">尚未开始</span></div>
-        <div id="chatLog" class="chat-log" role="log" aria-live="polite"><p class="empty">确认资料后，可在这里验证跨会话检索。没有命中时会明确说明。</p></div>
-        <form id="chatForm" class="chat-form">
-          <label for="question">你的问题</label>
-          <textarea id="question" rows="3" required placeholder="例如：资料什么时候进入正式资料库？"></textarea>
-          <div class="chat-options">
-            <label>回答方式<select id="provider"><option value="local">显示原文依据（默认）</option><option value="rag">本机生成回答</option><option value="external">外部模型（需确认发送范围）</option></select></label>
-            <label id="modelField" hidden>外部模型<input id="modelId" placeholder="模型配置 ID" /></label>
-            <label>问题的保密程度<select id="queryLevel"><option value="L1">公开</option><option value="L2">内部</option><option value="L3">保密</option></select></label>
-            <button id="sendQuestion" class="primary" type="submit">提问</button>
           </div>
-        </form>
-      </section>
+        </section>
+      </div>
 
-      <section class="panel sources-panel" aria-labelledby="sourcesTitle">
-        <div class="panel-heading"><div><span class="step">04</span><h3 id="sourcesTitle">外部资料（只读）</h3></div><span class="tag">L1 默认公开 · L2 须审批 · L3 禁止外发</span></div>
-        <div class="source-grid">
-          <form id="arxivForm" class="source-form">
-            <h4>arXiv 候选检索</h4>
-            <label>关键词<input id="arxivQuery" placeholder="例如：transformer" required /></label>
-            <button type="submit">检索候选</button>
-            <div id="arxivCandidates" class="candidate-list"></div>
+      <div id="reviewView" data-view="review" hidden>
+        <section class="panel review-panel" aria-labelledby="reviewTitle">
+          <div class="panel-heading"><div><h3 id="reviewTitle">需要确认的内容</h3><p>这里只列出待确认资料。核对异常字段和对应原文后，再决定是否保存。</p></div><span id="reviewQueueCount" class="tag">0 项待确认</span></div>
+          <div class="review-layout"><div id="reviewList" class="document-list" aria-label="待确认资料列表"></div><div id="reviewPreviewMount" class="preview-mount"></div></div>
+        </section>
+      </div>
+
+      <div id="chatView" data-view="chat" hidden>
+        <section class="panel chat-panel" aria-labelledby="chatTitle">
+          <div class="panel-heading"><div><h3 id="chatTitle">基于当前课题提问</h3><p>只使用已经确认的资料；回答附来源，没有依据时会明确说明。</p></div><span id="conversationLabel" class="tag">尚未开始</span></div>
+          <details class="scope-settings"><summary>检索范围</summary><div class="scope-card"><p id="scopeDescription">尚未选择课题</p><div id="crossProjectList"></div></div></details>
+          <div id="chatLog" class="chat-log" role="log" aria-live="polite"><p class="empty">可以从“这篇资料采用了什么方法，依据在哪里？”开始。</p></div>
+          <form id="chatForm" class="chat-form">
+            <label for="question">你的问题</label>
+            <textarea id="question" rows="3" required placeholder="例如：这篇论文的核心方法是什么？请给出原文依据。"></textarea>
+            <div class="chat-options">
+              <label>回答方式<select id="provider"><option value="local">显示原文依据（默认）</option><option value="rag">本机生成回答</option><option value="external">外部模型（需确认发送范围）</option></select></label>
+              <label id="modelField" hidden>外部模型<input id="modelId" placeholder="模型配置 ID" /></label>
+              <label>问题的保密程度<select id="queryLevel"><option value="L1">公开</option><option value="L2" selected>内部</option><option value="L3">保密</option></select></label>
+              <button id="sendQuestion" class="primary" type="submit">提问</button>
+            </div>
           </form>
-          <form id="githubForm" class="source-form">
-            <h4>GitHub 固定提交</h4>
-            <label>仓库<input id="githubRepo" placeholder="owner/repository" required /></label>
-            <label>指定文件（可选，逗号分隔）<input id="githubPaths" placeholder="README.md,pyproject.toml" /></label>
-            <button type="submit">只读导入</button>
+        </section>
+
+        <details class="panel secondary-panel">
+          <summary><span>研究辅助</span><small>实验设想、记忆对照与表格；生成内容仍需核对</small></summary>
+          <form id="generationForm" class="generation-form">
+            <label>辅助类型<select id="generationKind"><option value="ablation">消融实验设想</option><option value="compare">记忆对照</option><option value="table">对比表格</option><option value="pseudocode">伪代码</option><option value="review">模拟审稿</option></select></label>
+            <label>目标或问题<textarea id="generationQuery" rows="2" placeholder="例如：设计去除证据过滤的消融实验"></textarea></label>
+            <button type="submit">基于当前课题生成</button>
           </form>
-        </div>
-      </section>
+          <div id="generationResult" hidden><pre id="generationContent" class="preview-content"></pre><div class="button-row"><button id="correctGeneration" hidden type="button">修正并重新校验</button><button id="archiveGeneration" type="button">整理为待确认资料</button><button id="exportGeneration" type="button">导出本地文件</button><a id="downloadGeneration" class="text-link" hidden download>下载已导出文件</a></div></div>
+        </details>
+      </div>
 
-      <section class="panel generation-panel" aria-labelledby="generationTitle">
-        <div class="panel-heading"><div><span class="step">05</span><h3 id="generationTitle">实验设想与写作</h3></div><span class="tag">生成≠实测 · 归档须再审</span></div>
-        <form id="generationForm" class="generation-form">
-          <label>生成类型<select id="generationKind"><option value="ablation">消融实验设想</option><option value="compare">记忆对照</option><option value="table">对比表格</option><option value="pseudocode">伪代码</option><option value="review">模拟审稿</option><option value="latex">局部 LaTeX</option></select></label>
-          <label>目标或问题<textarea id="generationQuery" rows="2" placeholder="例如：设计去除证据过滤的消融实验"></textarea></label>
-          <button class="primary" type="submit">基于当前课题生成</button>
-        </form>
-        <div id="generationResult" hidden>
-          <pre id="generationContent" class="preview-content"></pre>
-          <div class="button-row"><button id="correctGeneration" hidden>修正并重新校验</button><button id="archiveGeneration">整理为待审核资料</button><button id="exportGeneration">导出本地文件</button><a id="downloadGeneration" class="text-link" hidden download>下载已导出文件</a></div>
-        </div>
-      </section>
+      <div id="dataView" data-view="data" hidden>
+        <section class="panel backup-panel" aria-labelledby="backupTitle">
+          <div class="panel-heading"><div><h3 id="backupTitle">备份与恢复</h3><p>按需要保存当前结果或完整资料包。</p></div></div>
+          <div class="backup-grid">
+            <section><h4>轻量备份</h4><p>保存课题目录、当前资料信息和有效记忆，不含原件与历史版本。</p><div class="button-row"><button id="exportLightLibrary" type="button">创建轻量备份</button><a id="downloadLightBackup" class="text-link" hidden download>下载轻量备份</a></div></section>
+            <section><h4>完整备份</h4><p>保存结构化数据、历史记录、检索索引和可用原件，缺失文件会写入清单。</p><button id="exportLibrary" type="button">创建完整备份</button><a id="downloadFullBackup" class="text-link" hidden download>下载完整备份</a></section>
+          </div>
+          <section class="restore-boundary"><h4>恢复完整备份</h4><p>选择不超过 200 MB 的新版完整备份并查看预览。只支持恢复到没有科研数据的账号，不覆盖已有资料；轻量备份和旧版完整备份不支持此恢复方式。</p><form id="restorePreviewForm"><label>选择完整备份 ZIP<input id="restoreFile" type="file" accept=".zip,application/zip" required></label><button type="submit">检查备份</button></form><div id="restorePreview" hidden><p id="restoreSummary" tabindex="-1"></p><label><input id="restoreConfirmed" type="checkbox">我已核对预览，确认恢复到当前空资料库</label><button id="restoreCommit" type="button" disabled>确认恢复</button></div></section>
+        </section>
 
-      <section class="panel governance-panel" aria-labelledby="governanceTitle">
-        <div class="panel-heading"><div><span class="step">06</span><h3 id="governanceTitle">批次、版本与数据治理</h3></div><span class="tag">最近 10 次撤销 · 回收站 30 天</span></div>
-        <div class="review-actions governance-actions">
-          <button id="batchPending">批处理当前待审资料</button>
-          <button id="refreshGovernance">刷新治理状态</button>
-          <button id="exportLightLibrary">轻量备份（不含原件）</button>
-          <button id="exportLibrary">完整备份（含可用原件）</button>
-          <button id="deleteCurrent" class="danger">将当前资料移入回收站</button>
-          <a id="downloadLightBackup" class="text-link" hidden download>下载轻量备份</a>
-        </div>
-        <p class="empty">轻量备份只保存当前课题目录和有效记忆，不含原件或历史版本；完整备份请使用 ZIP。</p>
-        <div class="governance-grid">
-          <section><h4>待处理冲突</h4><div id="conflictList" class="governance-list"></div></section>
-          <section><h4>当前资料历史版本</h4><div id="versionList" class="governance-list"></div></section>
-          <section><h4>回收站</h4><div id="recycleList" class="governance-list"></div></section>
-          <section><h4>最近变更</h4><div id="changeList" class="governance-list"></div></section>
-        </div>
-      </section>
+        <section class="panel governance-panel" aria-labelledby="governanceTitle">
+          <div class="panel-heading"><div><h3 id="governanceTitle">版本与数据记录</h3><p>在这里处理当前资料的历史、冲突、撤销和回收站。</p></div><span class="tag">最近 10 次撤销 · 回收站保留 30 天</span></div>
+          <div class="review-actions governance-actions"><button id="deleteCurrent" class="danger" type="button">将当前资料移入回收站</button></div>
+          <div class="governance-grid">
+            <section><h4>待处理冲突</h4><div id="conflictList" class="governance-list"></div></section>
+            <section><h4>当前资料历史版本</h4><div id="versionList" class="governance-list"></div></section>
+            <section><h4>回收站</h4><div id="recycleList" class="governance-list"></div></section>
+            <section><h4>最近变更</h4><div id="changeList" class="governance-list"></div></section>
+          </div>
+        </section>
+      </div>
     </section>
   </main>
 
   <dialog id="approvalDialog" aria-labelledby="approvalTitle">
     <form method="dialog" class="dialog-shell">
-      <div class="panel-heading"><h2 id="approvalTitle">L2 外发审批</h2><button value="cancel" aria-label="关闭">×</button></div>
+      <div class="panel-heading"><h2 id="approvalTitle">外发审批</h2><button value="cancel" aria-label="关闭">×</button></div>
       <p class="warning">请核对实际接收方、用途、材料片段和版本。批准仅覆盖本次范围，变化后须重新审批。</p>
       <dl id="approvalMeta" class="approval-meta"></dl>
       <div id="approvalFragments" class="approval-fragments"></div>
       <div class="button-row"><button id="confirmOutbound" value="default" class="primary">批准并发送一次</button><button value="cancel">取消，不外发</button></div>
     </form>
   </dialog>
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="toast" class="toast" aria-hidden="true" hidden></div>
 </body>
 </html>

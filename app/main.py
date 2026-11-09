@@ -398,6 +398,8 @@ def _startup() -> None:
     from app.research.batches import recover_interrupted_batches
 
     recover_interrupted_batches()
+    from app.research.async_tasks import recover as recover_async_tasks
+    recover_async_tasks()
     # Ensure confirm / binding / memory tables exist
     from app.channels.binding import ChannelBinding  # noqa: F401
     from app.channels.conversation import ChannelConversation  # noqa: F401

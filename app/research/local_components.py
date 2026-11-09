@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -84,15 +86,43 @@ def _offline_command(command: list[str]) -> list[str]:
     return command
 
 
+def _run_local(command: list[str], *, timeout: int, input_text: str | None = None):
+    from app.research.task_control import check_cancelled, in_task
+    if not in_task():
+        return subprocess.run(command, input=input_text, capture_output=True, text=True, timeout=timeout, env=_offline_env())
+    check_cancelled()
+    process = subprocess.Popen(command, stdin=subprocess.PIPE if input_text is not None else None,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               env=_offline_env(), start_new_session=True)
+    deadline = time.monotonic() + timeout
+    first = True
+    try:
+        while True:
+            check_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                stdout, stderr = process.communicate(input=input_text if first else None, timeout=min(0.2, remaining))
+                check_cancelled()
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                first = False
+    except BaseException:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise
+
+
 def run_worker(python: Path, script: Path, payload: dict[str, Any], *, timeout: int, component: str) -> dict[str, Any]:
     if not python.is_file():
         raise LocalComponentError(component, "本地组件不存在")
     try:
-        result = subprocess.run(
-            _offline_command([str(python), str(script)]),
-            input=json.dumps(payload, ensure_ascii=False), text=True,
-            capture_output=True, timeout=timeout, env=_offline_env(),
-        )
+        result = _run_local(_offline_command([str(python), str(script)]), timeout=timeout,
+                            input_text=json.dumps(payload, ensure_ascii=False))
     except subprocess.TimeoutExpired as exc:
         raise LocalComponentError(component, "本地组件运行超时，未自动重试") from exc
     except OSError as exc:
@@ -138,11 +168,14 @@ def generate(prompt: str, *, max_tokens: int = 768, timeout: int = 180) -> dict[
         "<|im_start|>user\n" + prompt + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
     ]
     try:
-        with _GENERATION_LOCK:
-            result = subprocess.run(
-                _offline_command(command), capture_output=True, text=True,
-                timeout=timeout, env=_offline_env(),
-            )
+        from app.research.task_control import check_cancelled
+        while not _GENERATION_LOCK.acquire(timeout=0.2):
+            check_cancelled()
+        try:
+            check_cancelled()
+            result = _run_local(_offline_command(command), timeout=timeout)
+        finally:
+            _GENERATION_LOCK.release()
     except subprocess.TimeoutExpired as exc:
         raise LocalComponentError("generative_llm", "本地生成超时，未自动重试或切换外部模型") from exc
     except OSError as exc:

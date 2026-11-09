@@ -121,7 +121,7 @@ def test_ac14_research_external_call_has_no_amount_cap_or_reminder(client, auth,
     assert "费用" not in result["answer"] and "金额" not in result["answer"]
 
 
-def test_ac12_public_retries_twice_but_approved_l2_failure_does_not_retry(client, auth, tmp_path, monkeypatch):
+def test_ac12_public_and_approved_l2_failure_do_not_retry(client, auth, tmp_path, monkeypatch):
     import httpx
     import pytest
     from app.data_access import user_scope
@@ -145,12 +145,12 @@ def test_ac12_public_retries_twice_but_approved_l2_failure_does_not_retry(client
             external_sources.search_arxiv(uid, project_id, query="transformer", level="L1")
         assert public_failed.value.code == "external_call_failed_no_retry"
         assert public_failed.value.data["error_type"] == "ConnectError"
-        assert len(calls) == 3
-        assert sleeps == [2.0, 5.0]
+        assert len(calls) == 1
+        assert sleeps == []
 
         pending = external_sources.search_arxiv(uid, project_id, query="transformer", level="L2")
         assert pending["status"] == "awaiting_outbound_approval"
-        assert len(calls) == 3
+        assert len(calls) == 1
         approval = pending["approval"]
         gateway.decide(uid, approval["id"], True)
         with pytest.raises(gateway.PolicyError) as failed:
@@ -159,8 +159,8 @@ def test_ac12_public_retries_twice_but_approved_l2_failure_does_not_retry(client
                 task_id=approval["task_id"], approval_id=approval["id"],
             )
         assert failed.value.code == "external_call_failed_no_retry"
-        assert len(calls) == 4
-        assert sleeps == [2.0, 5.0]
+        assert len(calls) == 2
+        assert sleeps == []
 
 
 def test_ac17_cross_project_derivative_inherits_highest_source_level(client, auth, tmp_path, monkeypatch):

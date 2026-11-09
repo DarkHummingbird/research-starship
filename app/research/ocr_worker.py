@@ -22,7 +22,9 @@ def main() -> None:
     result = ocr.predict(payload["image"])
     texts = list(result[0]["rec_texts"]) if result else []
     scores = [float(value) for value in result[0].get("rec_scores", [])] if result else []
-    print(json.dumps({"texts": texts, "scores": scores, "model": "PP-OCRv5_mobile"}))
+    boxes = result[0].get("rec_boxes", []) if result else []
+    boxes = [[float(n) for n in box] for box in boxes]
+    print(json.dumps({"texts": texts, "scores": scores, "boxes": boxes, "model": "PP-OCRv5_mobile"}))
 
 
 if __name__ == "__main__":

@@ -117,6 +117,12 @@ def test_scanned_pdf_manual_offline_ocr_and_review_gate(client, user):
     assert "Research agent" in result["source_text"]
     assert "87.4%" in result["source_text"]
     assert result["sources"][0]["locator"]["extraction"] == "offline_ocr"
+    source = result["sources"][0]
+    line = next(line for line in source["locator"]["ocr_lines"] if "87.4%" in line["text"])
+    highlighted = client.post(f"/api/research/documents/{document['id']}/highlight", headers=headers,
+        json={"expected_version": result["version"], "chunk_id": source["id"], "quote": line["text"]})
+    assert highlighted.status_code == 200, highlighted.text
+    assert highlighted.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_real_bge_embedding_is_offline_and_normalized():

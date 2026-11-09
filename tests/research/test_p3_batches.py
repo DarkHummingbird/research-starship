@@ -49,7 +49,7 @@ def test_five_items_two_workers_one_failure_and_manual_retry(client, batch_proje
     lock=threading.Lock()
     original=batches._run_document
 
-    def controlled(uid,document_id):
+    def controlled(uid,document_id,version=0,operation="analysis"):
         nonlocal active,maximum
         with lock:
             active+=1
@@ -58,7 +58,7 @@ def test_five_items_two_workers_one_failure_and_manual_retry(client, batch_proje
         try:
             if document_id==documents[2]["id"]:
                 raise RuntimeError("synthetic single failure")
-            original(uid,document_id)
+            original(uid,document_id,version,operation)
         finally:
             with lock:
                 active-=1
@@ -98,3 +98,48 @@ def test_interrupted_processing_requires_manual_retry(batch_project):
         item=conn.get(store.ResearchBatchItem,"bti-interrupted")
         assert item.status=="failed"
         assert "手动重试" in item.error
+
+
+def test_task_list_and_cancel_queued_are_owner_scoped(client, batch_project, auth):
+    uid, headers, project_id = batch_project
+    now = store.utc_now()
+    from app.data_access.research import memory_session
+    with memory_session() as conn:
+        conn.add(store.ResearchBatch(id="bat-queued", user_id=uid, project_id=project_id, status="queued", item_count=1, created_at=now, completed_at=""))
+        conn.add(store.ResearchBatchItem(id="bti-queued", batch_id="bat-queued", user_id=uid, project_id=project_id, document_id="missing", status="queued", error="", created_at=now, started_at="", completed_at=""))
+    assert client.get('/api/research/tasks', headers=headers).json()['data']['items'][0]['summary']['queued'] == 1
+    assert client.post('/api/research/batch-items/bti-queued/cancel', headers=auth('other-task-owner')).status_code == 404
+    cancelled = client.post('/api/research/batch-items/bti-queued/cancel', headers=headers)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()['data']['status'] == 'cancelled'
+    assert client.post('/api/research/batch-items/bti-queued/cancel', headers=headers).status_code == 409
+
+
+def test_restart_marks_queued_as_interrupted(batch_project):
+    uid, _, project_id = batch_project
+    from app.data_access.research import memory_session
+    now = store.utc_now()
+    with memory_session() as conn:
+        conn.add(store.ResearchBatch(id='bat-restart-queued', user_id=uid, project_id=project_id, status='queued', item_count=1, created_at=now, completed_at=''))
+        conn.add(store.ResearchBatchItem(id='bti-restart-queued', batch_id='bat-restart-queued', user_id=uid, project_id=project_id, document_id='missing', status='queued', error='', created_at=now, started_at='', completed_at=''))
+    assert batches.recover_interrupted_batches() == 1
+    assert batches.get_batch(uid, 'bat-restart-queued')['items'][0]['status'] == 'failed'
+
+
+def test_queued_task_rejects_document_version_change(client, batch_project, monkeypatch):
+    _, headers, project_id = batch_project
+    document = add_document(client, headers, project_id, 11)
+    class NoRun:
+        def submit(self, *args): pass
+    monkeypatch.setattr(batches, '_executor_pool', lambda: NoRun())
+    result = client.post(f'/api/research/projects/{project_id}/batches', headers=headers, json={'document_ids': [document['id']]}).json()['data']
+    item = result['items'][0]
+    assert item['document_version'] == 1
+    changed = client.patch(f"/api/research/documents/{document['id']}", headers=headers, json={'expected_version': 1, 'title': '新版标题'})
+    assert changed.status_code == 200, changed.text
+    from app.research.ingest import index_document
+    assert index_document(batch_project[0], document['id'], expected_version=1)['embedding_status'] == 'stale'
+    batches._process_item(item['id'])
+    result = client.get(f"/api/research/batches/{result['id']}", headers=headers).json()['data']
+    assert result['items'][0]['status'] == 'failed'
+    assert '版本已变化' in result['items'][0]['error']

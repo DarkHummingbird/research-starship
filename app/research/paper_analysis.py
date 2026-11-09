@@ -184,11 +184,14 @@ def normalize_evidence_sources(payload: Any, chunks: list[dict[str, Any]]) -> An
     return payload
 
 
-def analyze_document(user_id: str, document_id: str) -> dict[str, Any]:
+def analyze_document(user_id: str, document_id: str, *, expected_version: int | None = None) -> dict[str, Any]:
     from app.research.service import ResearchError, _document
+    from app.research.task_control import check_cancelled
 
     with migration_session() as conn:
         row = _document(conn, user_id, document_id)
+        if expected_version is not None and row.version != expected_version:
+            raise ResearchError(409, "document_version_changed", "资料版本已变化，请新建任务")
         if row.document_type != "paper":
             raise ResearchError(400, "paper_only", "结构化论文分析仅适用于 paper 类型资料")
         if row.status == "approved":
@@ -241,7 +244,9 @@ def analyze_document(user_id: str, document_id: str) -> dict[str, Any]:
             conn.flush()
         from app.research.service import ResearchError
         raise ResearchError(422, "paper_analysis_invalid", f"论文结构化结果未通过校验：{exc}") from exc
+    check_cancelled()
     with memory_session() as conn:
+        check_cancelled()
         row = conn.execute(select(store.ResearchDocument).where(
             store.ResearchDocument.id == document_id,
             store.ResearchDocument.user_id == user_id,
@@ -259,7 +264,7 @@ def analyze_document(user_id: str, document_id: str) -> dict[str, Any]:
         return store.public_document(row, include_text=True)
 
 
-def update_analysis(user_id: str, document_id: str, *, expected_version: int, payload: Any) -> dict[str, Any]:
+def update_analysis(user_id: str, document_id: str, *, expected_version: int, payload: Any, resolutions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     from app.research.service import ResearchError, _document
 
     with memory_session() as conn:
@@ -268,6 +273,26 @@ def update_analysis(user_id: str, document_id: str, *, expected_version: int, pa
             raise ResearchError(409, "document_version_changed", "资料版本已变化，请重新预览")
         if row.status == "approved":
             raise ResearchError(409, "approved_analysis_readonly", "已确认分析不能直接覆盖，请创建新版本")
+        previous = store.json_value(row.analysis_json, {})
+        unresolved = [item for item in previous.get("suspicious", []) if item.startswith("已隔离：")]
+        decisions = resolutions or []
+        if decisions and not unresolved:
+            raise ResearchError(409, "analysis_review_invalid", "没有待处理的隔离候选")
+        if unresolved:
+            if len(decisions) != len(unresolved) or {item.get("issue") for item in decisions} != set(unresolved):
+                raise ResearchError(409, "analysis_review_incomplete", "请逐项修正或舍弃所有隔离候选后再保存")
+            for decision in decisions:
+                issue = decision.get("issue", "")
+                match = re.match(r"^已隔离：(method|baseline|datasets|metrics|limitations)/\d+:", issue)
+                action = decision.get("action")
+                if not match or action not in ("corrected", "discarded"):
+                    raise ResearchError(422, "analysis_review_invalid", "审核决定无效")
+                if action == "corrected" and decision.get("fact") not in payload.get(match.group(1), []):
+                    raise ResearchError(422, "analysis_review_invalid", "修正内容不在对应字段中")
+            payload = dict(payload)
+            payload["suspicious"] = [item for item in payload.get("suspicious", [])
+                                     if not item.startswith("已隔离：") and "条模型候选因来源校验失败被隔离" not in item]
+            payload["suspicious"].extend(f"人工审核记录：{item['issue']} → {'已修正' if item['action'] == 'corrected' else '已舍弃'}" for item in decisions)
         chunks = [store.model_dict(chunk) for chunk in conn.execute(select(store.ResearchChunk).where(
             store.ResearchChunk.document_id == document_id,
             store.ResearchChunk.document_version == row.version,
@@ -276,6 +301,15 @@ def update_analysis(user_id: str, document_id: str, *, expected_version: int, pa
             validate_analysis(payload, chunks)
         except PaperValidationError as exc:
             raise ResearchError(422, "paper_analysis_invalid", f"论文结构化结果未通过校验：{exc}") from exc
+        # Existing review decisions are server-owned and survive later field edits.
+        records = [item for item in previous.get("suspicious", []) if item.startswith("人工审核记录：")]
+        current_records = [item for item in payload["suspicious"] if item.startswith("人工审核记录：")]
+        allowed_records = records + [f"人工审核记录：{item['issue']} → {'已修正' if item['action'] == 'corrected' else '已舍弃'}" for item in decisions]
+        if any(item not in allowed_records for item in current_records):
+            raise ResearchError(422, "analysis_review_invalid", "审核记录由系统生成，不能手工修改")
+        payload = dict(payload)
+        payload["suspicious"] = [item for item in payload["suspicious"] if not item.startswith("人工审核记录：")]
+        payload["suspicious"].extend(dict.fromkeys(allowed_records))
         row.analysis_json = json.dumps(payload, ensure_ascii=False)
         row.analysis_status = "ready"
         row.extraction_model = "human_reviewed"

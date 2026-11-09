@@ -97,29 +97,48 @@ def import_document(
     return result
 
 
-def index_document(user_id: str, document_id: str) -> dict[str, Any]:
-    with memory_session() as conn:
+def index_document(user_id: str, document_id: str, *, expected_version: int | None = None) -> dict[str, Any]:
+    from app.data_access.research import migration_session
+    from app.research.task_control import check_cancelled
+    with migration_session() as conn:
         row = conn.execute(select(store.ResearchDocument).where(
             store.ResearchDocument.id == document_id, store.ResearchDocument.user_id == user_id
         )).scalar_one_or_none()
         if row is None:
             return {"embedding_status": "missing"}
+        if expected_version is not None and row.version != expected_version:
+            return {"embedding_status": "stale", "processing_error": "资料版本已变化"}
         chunks = conn.execute(select(store.ResearchChunk).where(
             store.ResearchChunk.document_id == document_id,
             store.ResearchChunk.document_version == row.version,
         ).order_by(store.ResearchChunk.ordinal)).scalars().all()
-        if row.processing_status == "needs_ocr":
-            row.embedding_status = "paused"
-            row.processing_error = "存在待 OCR 页面，向量化暂停"
-            conn.flush()
-            return {"embedding_status": row.embedding_status, "processing_error": row.processing_error}
+        version = row.version
+        needs_ocr = row.processing_status == "needs_ocr"
+        contents = [chunk.content for chunk in chunks]
+    check_cancelled()
+    failure = "存在待 OCR 页面，向量化暂停" if needs_ocr else ""
+    output = None
+    if not needs_ocr:
         try:
-            output = embed_texts([chunk.content for chunk in chunks])
+            output = embed_texts(contents)
         except LocalComponentError as exc:
-            row.embedding_status = "paused" if row.confidentiality == "L3" else "degraded"
-            row.processing_error = exc.message
+            failure = exc.message or "本地向量化失败"
+    check_cancelled()
+    with memory_session() as conn:
+        row = conn.execute(select(store.ResearchDocument).where(
+            store.ResearchDocument.id == document_id, store.ResearchDocument.user_id == user_id
+        )).scalar_one_or_none()
+        if row is None or row.version != version:
+            return {"embedding_status": "stale", "processing_error": "资料版本已变化"}
+        check_cancelled()
+        if failure:
+            row.embedding_status = "paused" if needs_ocr or row.confidentiality == "L3" else "degraded"
+            row.processing_error = failure
             conn.flush()
-            return {"embedding_status": row.embedding_status, "processing_error": row.processing_error}
+            return {"embedding_status": row.embedding_status, "processing_error": failure}
+        chunks = conn.execute(select(store.ResearchChunk).where(
+            store.ResearchChunk.document_id == document_id, store.ResearchChunk.document_version == version,
+        ).order_by(store.ResearchChunk.ordinal)).scalars().all()
         conn.execute(delete(store.ResearchEmbedding).where(
             store.ResearchEmbedding.document_id == document_id,
             store.ResearchEmbedding.document_version == row.version,

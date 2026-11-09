@@ -224,7 +224,24 @@ class ResearchBatchItem(ResearchBase):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[str] = mapped_column(String, nullable=False)
     document_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_version: Mapped[int] = mapped_column(Integer, default=0)
+    operation: Mapped[str] = mapped_column(String, default="analysis")
     status: Mapped[str] = mapped_column(String, nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    started_at: Mapped[str] = mapped_column(String, default="")
+    completed_at: Mapped[str] = mapped_column(String, default="")
+
+
+class ResearchAsyncTask(ResearchBase):
+    __tablename__ = "research_async_tasks"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    request_json: Mapped[str] = mapped_column(Text, nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[str] = mapped_column(String, default="")
@@ -348,6 +365,7 @@ def init_db() -> None:
                 "fact_json": "TEXT DEFAULT '{}'",
             },
             "research_chunks": {"locator_json": "TEXT DEFAULT '{}'"},
+            "research_batch_items": {"document_version": "INTEGER DEFAULT 0", "operation": "VARCHAR DEFAULT 'analysis'"},
         }
         with engine.begin() as connection:
             for table_name, columns in additions.items():

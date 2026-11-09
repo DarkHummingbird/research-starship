@@ -17,12 +17,15 @@ def has_formula_notation(text: str) -> bool:
     return bool(re.search(r"[Σ∑√]|log\s*\(|softmax|\^|_", text, re.I))
 
 
-def ocr_document(user_id: str, document_id: str) -> dict[str, Any]:
+def ocr_document(user_id: str, document_id: str, *, expected_version: int | None = None) -> dict[str, Any]:
     from app.research.service import ResearchError, _document
     from app.research.ingest import index_document
+    from app.research.task_control import check_cancelled
 
     with migration_session() as conn:
         row = _document(conn, user_id, document_id)
+        if expected_version is not None and row.version != expected_version:
+            raise ResearchError(409, "document_version_changed", "资料版本已变化，请新建任务")
         if Path(row.original_filename).suffix.lower() != ".pdf":
             raise ResearchError(400, "ocr_pdf_only", "本地 OCR 仅适用于 PDF 页面")
         if row.status == "approved":
@@ -45,13 +48,20 @@ def ocr_document(user_id: str, document_id: str) -> dict[str, Any]:
         output_dir = store.data_dir() / "ocr" / document_id
         output_dir.mkdir(parents=True, exist_ok=True)
         for page_number, page in enumerate(pdf, 1):
+            check_cancelled()
             text = (page.get_text() or "").strip()
             extraction = "pdf_text"
+            ocr_lines = []
             if not text:
                 image_path = output_dir / f"page-{page_number}.png"
                 page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).save(str(image_path))
                 output = ocr_image(image_path)
                 text = "\n".join(output["texts"]).strip()
+                boxes = output.get("boxes", [])
+                if len(boxes) == len(output["texts"]):
+                    ocr_lines = [{"text": line, "box": [float(value) / 2 for value in box]}
+                                 for line, box in zip(output["texts"], boxes, strict=True)
+                                 if isinstance(box, list) and len(box) == 4]
                 extraction = "offline_ocr"
                 ocr_pages.append(page_number)
                 if any(score < 0.75 for score in output.get("scores", [])):
@@ -62,7 +72,10 @@ def ocr_document(user_id: str, document_id: str) -> dict[str, Any]:
                 text = "本地 OCR 未识别出可核验文字，请人工查看原页。"
             for index, part in enumerate(_split_text(text), 1):
                 chapter = f"第 {page_number} 页" + (f"（片段 {index}）" if index > 1 else "")
-                sections.append((chapter, part, {"page": page_number, "part": index, "extraction": extraction}))
+                locator = {"page": page_number, "part": index, "extraction": extraction}
+                if ocr_lines:
+                    locator["ocr_lines"] = ocr_lines
+                sections.append((chapter, part, locator))
                 source_parts.append(f"[{chapter}｜{extraction}]\n{part}")
         pdf.close()
     except LocalComponentError as exc:
@@ -73,11 +86,13 @@ def ocr_document(user_id: str, document_id: str) -> dict[str, Any]:
             conn.flush()
         raise ResearchError(503, "local_ocr_failed", f"本地 OCR 失败，未自动重试：{exc.message}") from exc
     new_version = source["version"] + 1
+    check_cancelled()
     card, chunks = _card(
         document_id=document_id, version=new_version, title=source["title"],
         confidentiality=source["confidentiality"], sections=sections, document_type="paper",
     )
     with memory_session() as conn:
+        check_cancelled()
         row = _document(conn, user_id, document_id)
         if row.version != source["version"]:
             raise ResearchError(409, "document_version_changed", "OCR 期间资料版本已变化，请重新检查")

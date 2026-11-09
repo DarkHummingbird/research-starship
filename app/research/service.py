@@ -379,7 +379,7 @@ def search_confirmed(
             continue
         if vector and coverage < 0.16 and semantic < 0.25:
             continue
-        if quantity_question and not re.search(r"\d+\s*(?:个|篇|项|条|种|天|年|月|日|%|GB|MB)|数量|上限|最多|最少|多个|无限", chunk.content):
+        if quantity_question and not re.search(r"\d|数量|上限|最多|最少|多个|无限", chunk.content, re.I):
             continue
         if quantity_question and "课题" in query and not re.search(
             r"(?:\d+|多个|无限|无上限)[^。\n]{0,20}课题|课题[^。\n]{0,20}(?:\d+|多个|无限|无上限|上限)", chunk.content
@@ -530,6 +530,8 @@ def chat(
     task_id: str = "",
     approval_id: str = "",
 ) -> dict[str, Any]:
+    from app.research.task_control import check_cancelled
+    check_cancelled()
     message = message.strip()
     if not message or len(message) > 20000:
         raise ResearchError(400, "invalid_message", "问题须为 1–20000 个字符")
@@ -551,8 +553,10 @@ def chat(
                 id=conversation_id, user_id=user_id, project_id=project_id,
                 title=message[:40], created_at=store.utc_now(),
             ))
-        _save_message(conn, conversation_id, user_id, project_id, "user", message, query_confidentiality, [], "user")
+        if not approval_id:
+            _save_message(conn, conversation_id, user_id, project_id, "user", message, query_confidentiality, [], "user")
     matches = search_confirmed(user_id, project_id, message, cross_project_ids=cross_project_ids)
+    check_cancelled()
     sources = _sources(matches)
     classification = gateway.highest_level([query_confidentiality] + [item["confidentiality"] for item in matches])
     if not matches:
@@ -615,7 +619,15 @@ def chat(
         model = f"external:{model_id}"
     else:
         raise ResearchError(400, "invalid_provider", "处理通道必须为 local 或 external")
+    check_cancelled()
     with memory_session() as conn:
+        check_cancelled()
+        for match in matches:
+            current = _document(conn, user_id, match["document_id"])
+            if (current.status != "approved" or current.version != match["document_version"]
+                    or current.approved_version != match["document_version"]
+                    or current.confidentiality != match["confidentiality"]):
+                raise ResearchError(409, "document_version_changed", "回答期间来源已变化，请重新提问")
         _save_message(conn, conversation_id, user_id, project_id, "assistant", answer, classification, sources, model)
     return {
         "status": "answered", "conversation_id": conversation_id, "answer": answer,

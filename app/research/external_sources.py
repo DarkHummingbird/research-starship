@@ -120,7 +120,7 @@ def search_arxiv(
     })
 
     def fetch() -> list[dict[str, Any]]:
-        response = _request(url, allowed_hosts=ARXIV_HOSTS, retries=2 if level == "L1" else 0)
+        response = _request(url, allowed_hosts=ARXIV_HOSTS, retries=0)
         root = ET.fromstring(response.content)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
         candidates = []

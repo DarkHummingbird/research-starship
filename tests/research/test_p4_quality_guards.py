@@ -147,9 +147,16 @@ def test_mixed_model_facts_are_quarantined_with_raw_output_and_review_gate(clien
     assert client.get(
         f"/api/research/projects/{project_id}/memories", headers=headers,
     ).json()["data"]["items"] == []
-    corrected = client.put(
+    incomplete = client.put(
         f"/api/research/documents/{document['id']}/analysis",
         json={"expected_version": 1, "analysis": result["analysis"]}, headers=headers,
+    )
+    assert incomplete.status_code == 409
+    issue = next(item for item in result["analysis"]["suspicious"] if item.startswith("已隔离："))
+    corrected = client.put(
+        f"/api/research/documents/{document['id']}/analysis",
+        json={"expected_version": 1, "analysis": result["analysis"],
+              "resolutions": [{"issue": issue, "action": "discarded"}]}, headers=headers,
     )
     assert corrected.status_code == 200, corrected.text
     assert corrected.json()["data"]["analysis_status"] == "ready"

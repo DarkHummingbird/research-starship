@@ -175,6 +175,7 @@ def generate_output(
     document_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     from app.research.service import ResearchError, _document, search_confirmed
+    from app.research.task_control import check_cancelled
 
     if kind not in KINDS:
         raise ResearchError(400, "invalid_generation_kind", "不支持的生成类型")
@@ -185,10 +186,12 @@ def generate_output(
         if project is None:
             raise ResearchError(404, "project_not_found", "课题不存在")
         selected: list[dict[str, Any]] = []
+        source_status = {}
         for document_id in document_ids or []:
             row = _document(conn, user_id, document_id)
             if row.project_id != project_id:
                 raise ResearchError(400, "document_project_mismatch", "资料不属于当前课题")
+            source_status[row.id] = row.status
             chunks = conn.execute(select(store.ResearchChunk).where(
                 store.ResearchChunk.document_id == document_id,
                 store.ResearchChunk.document_version == row.version,
@@ -254,10 +257,20 @@ def generate_output(
     } for item in matches]
     classification = gateway.highest_level([item["confidentiality"] for item in matches]) if matches else "L1"
     generation_id = "gen_" + uuid.uuid4().hex
+    def verify_sources(conn):
+        check_cancelled()
+        for source in sources:
+            row = _document(conn, user_id, source['document_id'])
+            expected_status = source_status.get(row.id, 'approved')
+            if (row.version != source['version'] or row.confidentiality != source['confidentiality']
+                    or row.status != expected_status or row.status == 'deleted'
+                    or (expected_status == 'approved' and row.approved_version != source['version'])):
+                raise ResearchError(409, 'document_version_changed', '生成期间资料已变化，请重新提交')
     try:
         content = _validate_generated_content(kind, content, matches)
     except ResearchError as exc:
         with memory_session() as conn:
+            verify_sources(conn)
             row = store.ResearchGeneration(
                 id=generation_id, user_id=user_id, project_id=project_id, kind=kind,
                 content=content, sources_json=json.dumps(sources, ensure_ascii=False),
@@ -269,6 +282,7 @@ def generate_output(
             exc.data["generation_id"] = generation_id
         raise
     with memory_session() as conn:
+        verify_sources(conn)
         row = store.ResearchGeneration(
             id=generation_id, user_id=user_id, project_id=project_id, kind=kind,
             content=content, sources_json=json.dumps(sources, ensure_ascii=False),

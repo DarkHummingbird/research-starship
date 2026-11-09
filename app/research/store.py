@@ -7,6 +7,7 @@ from typing import Any
 from app.data_access.research import (
     ResearchBatch,
     ResearchBatchItem,
+    ResearchAsyncTask,
     ResearchChange,
     ResearchChunk,
     ResearchConflict,
@@ -29,7 +30,7 @@ from app.data_access.research import (
 
 
 __all__ = [
-    "ResearchBatch", "ResearchBatchItem", "ResearchChange", "ResearchChunk", "ResearchConflict",
+    "ResearchBatch", "ResearchBatchItem", "ResearchAsyncTask", "ResearchChange", "ResearchChunk", "ResearchConflict",
     "ResearchConversation", "ResearchDocument", "ResearchDocumentVersion", "ResearchEmbedding",
     "ResearchGeneration", "ResearchMemory", "ResearchMessage", "ResearchOutboundApproval",
     "ResearchProject", "ResearchSecurityEvent", "data_dir", "db_path", "init_db",

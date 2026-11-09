@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from app.auth import require_user
@@ -34,6 +34,13 @@ class DocumentUpdateBody(BaseModel):
 class AnalysisUpdateBody(BaseModel):
     expected_version: int = Field(ge=1)
     analysis: dict[str, Any]
+    resolutions: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+
+
+class SourceHighlightBody(BaseModel):
+    expected_version: int = Field(ge=1)
+    chunk_id: str = Field(min_length=1, max_length=200)
+    quote: str = Field(min_length=1, max_length=5000)
 
 
 class ConversationBody(BaseModel):
@@ -124,10 +131,17 @@ class ConflictResolutionBody(BaseModel):
 
 class BatchBody(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=20)
+    reanalyze: bool = False
 
 
 class ConfirmActionBody(BaseModel):
     confirmed: bool = True
+
+
+class RestoreBackupBody(BaseModel):
+    token: str
+    sha256: str
+    confirmed: bool = False
 
 
 class DeleteDocumentBody(ConfirmActionBody):
@@ -205,7 +219,7 @@ async def import_document(
     project_id: str,
     file: UploadFile = File(...),
     confidentiality: Literal["L1", "L2", "L3"] = Form("L2"),
-    document_type: Literal["tutorial", "paper"] | None = Form(None),
+    document_type: Literal["tutorial", "paper", "repository"] | None = Form(None),
     chunking_strategy: Literal["auto", "parent_recursive", "recursive", "fixed", "semantic"] = Form("auto"),
     uid: str = Depends(require_user),
 ):
@@ -249,6 +263,55 @@ def source_file(document_id: str, uid: str = Depends(require_user)):
     return FileResponse(path, filename=filename, content_disposition_type="inline")
 
 
+@router.post("/documents/{document_id}/highlight")
+def highlight_source(document_id: str, body: SourceHighlightBody, uid: str = Depends(require_user)):
+    """Render an exact, unambiguous quote on its source page without changing the PDF."""
+    import hashlib
+    from pathlib import Path
+    from sqlalchemy import select
+    from app.data_access.research import migration_session
+
+    with migration_session() as conn:
+        row = service._document(conn, uid, document_id)
+        if row.version != body.expected_version:
+            raise service.ResearchError(409, "document_version_changed", "资料版本已变化，请刷新后重试")
+        chunk = conn.execute(select(store.ResearchChunk).where(
+            store.ResearchChunk.id == body.chunk_id,
+            store.ResearchChunk.user_id == uid,
+            store.ResearchChunk.document_id == document_id,
+            store.ResearchChunk.document_version == row.version,
+        )).scalar_one_or_none()
+        if not chunk or body.quote not in chunk.content:
+            raise service.ResearchError(422, "highlight_unavailable", "引文不在该来源片段中，无法可靠定位")
+        locator = store.json_value(chunk.locator_json, {})
+        page_number = locator.get("page")
+        path = Path(row.stored_path)
+        if path.suffix.lower() != ".pdf" or not isinstance(page_number, int):
+            raise service.ResearchError(422, "highlight_unavailable", "该来源没有可定位的 PDF 页面")
+        if not path.is_file():
+            raise service.ResearchError(404, "source_file_missing", "系统副本不存在")
+        with path.open("rb") as source_file:
+            digest = hashlib.file_digest(source_file, "sha256").hexdigest()
+        if digest != row.sha256:
+            raise service.ResearchError(409, "source_file_changed", "系统副本与原资料不一致，请重新导入")
+        try:
+            import fitz
+            with fitz.open(path) as pdf:
+                if page_number < 1 or page_number > len(pdf):
+                    raise service.ResearchError(422, "highlight_unavailable", "来源页码无效")
+                page = pdf[page_number - 1]
+                from app.research.highlight import page_rectangles
+                rectangles = page_rectangles(page, body.quote, locator)
+                if not rectangles:
+                    raise service.ResearchError(422, "highlight_unavailable", "原文无法唯一定位；旧扫描件请重新导入并识别，或人工核对")
+                page.add_highlight_annot(rectangles)
+                scale = min(1.5, 1800 / max(page.rect.width, page.rect.height))
+                image = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False).tobytes("png")
+        except ImportError as exc:
+            raise service.ResearchError(503, "highlight_unavailable", "本地 PDF 渲染组件不可用") from exc
+    return Response(image, media_type="image/png", headers={"Cache-Control": "no-store", "X-Source-Page": str(page_number), "X-Source-Extraction": locator.get("extraction", "")})
+
+
 @router.post("/documents/{document_id}/ocr")
 def run_ocr(document_id: str, uid: str = Depends(require_user)):
     from app.research.ocr import ocr_document
@@ -269,7 +332,7 @@ def edit_analysis(document_id: str, body: AnalysisUpdateBody, uid: str = Depends
     from app.research.paper_analysis import update_analysis
 
     return _data(update_analysis(
-        uid, document_id, expected_version=body.expected_version, payload=body.analysis,
+        uid, document_id, expected_version=body.expected_version, payload=body.analysis, resolutions=body.resolutions,
     ), "analysis_ready")
 
 
@@ -411,7 +474,7 @@ def resolve_conflict(conflict_id: str, body: ConflictResolutionBody, uid: str = 
 def create_batch(project_id: str, body: BatchBody, uid: str = Depends(require_user)):
     from app.research.batches import create_batch as create
 
-    return _data(create(uid, project_id, body.document_ids), "queued", 202)
+    return _data(create(uid, project_id, body.document_ids, operation="reanalyze" if body.reanalyze else "analysis"), "queued", 202)
 
 
 @router.get("/batches/{batch_id}")
@@ -419,6 +482,124 @@ def batch_detail(batch_id: str, uid: str = Depends(require_user)):
     from app.research.batches import get_batch
 
     return _data(get_batch(uid, batch_id))
+
+
+@router.get("/tasks")
+def tasks(uid: str = Depends(require_user)):
+    from app.research.batches import list_tasks
+    from app.research.async_tasks import list_tasks as list_async
+    return _data({"items": list_tasks(uid), "async_items": list_async(uid)})
+
+
+@router.post("/projects/{project_id}/chat-tasks")
+def create_chat_task(project_id: str, body: ChatBody, uid: str = Depends(require_user)):
+    from app.research.async_tasks import create
+    return _data(create(uid, project_id, "chat", body.model_dump()), "queued", 202)
+
+
+@router.post("/projects/{project_id}/generation-tasks")
+def create_generation_task(project_id: str, body: GenerationBody, uid: str = Depends(require_user)):
+    from app.research.async_tasks import create
+    return _data(create(uid, project_id, "generation", body.model_dump()), "queued", 202)
+
+
+@router.post("/projects/{project_id}/document-tasks")
+async def create_document_task(project_id: str, file: UploadFile = File(...),
+    confidentiality: Literal["L1", "L2", "L3"] = Form("L2"),
+    document_type: Literal["tutorial", "paper", "repository"] | None = Form(None),
+    chunking_strategy: Literal["auto", "parent_recursive", "recursive", "fixed", "semantic"] = Form("auto"),
+    uid: str = Depends(require_user)):
+    from app.research.async_tasks import create, stage
+    from app.data_access.research import migration_session
+    with migration_session() as conn:
+        service._project(conn, uid, project_id)
+    content = await file.read(MAX_FILE_BYTES + 1)
+    await file.close()
+    staged = stage(uid, content, MAX_FILE_BYTES)
+    return _data(create(uid, project_id, 'upload', {**staged, 'filename': file.filename or '',
+        'confidentiality': confidentiality, 'document_type': document_type, 'chunking_strategy': chunking_strategy}), 'queued', 202)
+
+
+def _source_task(uid, project_id, kind, body):
+    from app.research.async_tasks import create
+    values = body.model_dump(exclude={'task_id', 'approval_id', 'confidentiality'})
+    values['level'] = body.confidentiality
+    return _data(create(uid, project_id, kind, values), 'queued', 202)
+
+
+@router.post("/projects/{project_id}/source-tasks/arxiv/search")
+def create_arxiv_search_task(project_id: str, body: ArxivSearchBody, uid: str = Depends(require_user)):
+    return _source_task(uid, project_id, 'arxiv_search', body)
+
+
+@router.post("/projects/{project_id}/source-tasks/arxiv/import")
+def create_arxiv_import_task(project_id: str, body: ArxivImportBody, uid: str = Depends(require_user)):
+    return _source_task(uid, project_id, 'arxiv_import', body)
+
+
+@router.post("/projects/{project_id}/source-tasks/github/import")
+def create_github_task(project_id: str, body: GithubImportBody, uid: str = Depends(require_user)):
+    return _source_task(uid, project_id, 'github_import', body)
+
+
+@router.post("/projects/{project_id}/source-tasks/webpage/import")
+def create_webpage_task(project_id: str, body: WebpageImportBody, uid: str = Depends(require_user)):
+    return _source_task(uid, project_id, 'webpage_import', body)
+
+
+@router.post("/backup-tasks/{backup_kind}")
+def create_backup_task(backup_kind: Literal['full', 'light'], body: ConfirmActionBody, uid: str = Depends(require_user)):
+    if not body.confirmed:
+        raise service.ResearchError(409, 'export_confirmation_required', '请确认创建备份')
+    from app.research.async_tasks import create
+    return _data(create(uid, '', 'backup_' + backup_kind, {}), 'queued', 202)
+
+
+@router.post("/restore-tasks/preview")
+async def create_restore_preview_task(file: UploadFile = File(...), uid: str = Depends(require_user)):
+    from app.research.async_tasks import create, stage
+    from app.research.restore_backup import MAX_ARCHIVE
+    content = await file.read(MAX_ARCHIVE + 1)
+    await file.close()
+    return _data(create(uid, '', 'restore_preview', stage(uid, content, MAX_ARCHIVE)), 'queued', 202)
+
+
+@router.post("/restore-tasks/confirm")
+def create_restore_confirm_task(body: RestoreBackupBody, uid: str = Depends(require_user)):
+    if not body.confirmed:
+        raise service.ResearchError(409, 'restore_confirmation_required', '请先确认预览后再恢复')
+    from app.research.async_tasks import create
+    return _data(create(uid, '', 'restore_confirm', {'token': body.token, 'expected_sha256': body.sha256, 'confirmed': True}), 'queued', 202)
+
+
+@router.get("/async-tasks/{task_id}")
+def async_task(task_id: str, uid: str = Depends(require_user)):
+    from app.research.async_tasks import get_task
+    return _data(get_task(uid, task_id))
+
+
+@router.post("/async-tasks/{task_id}/cancel")
+def cancel_async_task(task_id: str, uid: str = Depends(require_user)):
+    from app.research.async_tasks import cancel
+    return _data(cancel(uid, task_id))
+
+
+@router.post("/async-tasks/{task_id}/resume")
+def resume_async_task(task_id: str, uid: str = Depends(require_user)):
+    from app.research.async_tasks import resume
+    return _data(resume(uid, task_id), "queued", 202)
+
+
+@router.post("/async-tasks/{task_id}/retry")
+def retry_async_task(task_id: str, uid: str = Depends(require_user)):
+    from app.research.async_tasks import retry
+    return _data(retry(uid, task_id), "queued", 202)
+
+
+@router.post("/batch-items/{item_id}/cancel")
+def cancel_batch_item(item_id: str, uid: str = Depends(require_user)):
+    from app.research.batches import cancel_batch_item as cancel
+    return _data(cancel(uid, item_id), "stop_requested")
 
 
 @router.post("/batch-items/{item_id}/retry")
@@ -499,6 +680,30 @@ def export_lightweight(body: ConfirmActionBody, uid: str = Depends(require_user)
     from app.research.backup import export_lightweight as export
 
     return _data(export(uid, confirmed=body.confirmed), "exported", 201)
+
+
+@router.get("/export/full/download")
+def download_full_backup(filename: str, uid: str = Depends(require_user)):
+    from pathlib import Path
+    if Path(filename).name != filename or not filename.startswith("research-starship-backup") or not filename.endswith(".zip"):
+        raise service.ResearchError(404, "backup_file_missing", "备份文件不存在")
+    target = store.data_dir() / "exports" / uid / filename
+    if not target.is_file():
+        raise service.ResearchError(404, "backup_file_missing", "备份文件不存在")
+    return FileResponse(target, filename=filename, media_type="application/zip")
+
+
+@router.post("/restore/preview")
+async def preview_backup(file: UploadFile = File(...), uid: str = Depends(require_user)):
+    from app.research.restore_backup import MAX_ARCHIVE, preview
+    content = await file.read(MAX_ARCHIVE + 1)
+    return _data(preview(uid, content), "previewed")
+
+
+@router.post("/restore/confirm")
+def confirm_backup_restore(body: RestoreBackupBody, uid: str = Depends(require_user)):
+    from app.research.restore_backup import restore
+    return _data(restore(uid, body.token, body.sha256, body.confirmed), "restored", 201)
 
 
 @router.get("/export/light/download")

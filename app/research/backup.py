@@ -31,8 +31,16 @@ def export_library(user_id: str, *, confirmed: bool) -> dict[str, Any]:
         changes = _rows(conn, store.ResearchChange, user_id)
         conflicts = _rows(conn, store.ResearchConflict, user_id)
         outbound = _rows(conn, store.ResearchOutboundApproval, user_id)
+        chunks = _rows(conn, store.ResearchChunk, user_id)
+        embeddings = _rows(conn, store.ResearchEmbedding, user_id)
+        conversations = _rows(conn, store.ResearchConversation, user_id)
+        messages = _rows(conn, store.ResearchMessage, user_id)
+        batches = _rows(conn, store.ResearchBatch, user_id)
+        batch_items = _rows(conn, store.ResearchBatchItem, user_id)
+        security_events = _rows(conn, store.ResearchSecurityEvent, user_id)
+        async_tasks = [row for row in _rows(conn, store.ResearchAsyncTask, user_id) if row['project_id']]
     manifest = {
-        "format": "research-starship-backup/v1",
+        "format": "research-starship-backup/v2",
         "created_at": store.utc_now(),
         "project_count": len(projects),
         "document_count": len(documents),
@@ -42,7 +50,7 @@ def export_library(user_id: str, *, confirmed: bool) -> dict[str, Any]:
             for level in ("L1", "L2", "L3")
         },
         "missing_originals": [],
-        "includes": ["structured_cards", "available_system_copies", "versions", "changes", "conflicts"],
+        "includes": ["structured_cards", "available_system_copies", "versions", "changes", "conflicts", "chunks", "embeddings", "conversations", "tasks", "async_tasks", "security_events"],
         "excludes": ["API keys", "external credentials", "remote export"],
     }
     directory = store.data_dir() / "exports" / user_id
@@ -54,23 +62,39 @@ def export_library(user_id: str, *, confirmed: bool) -> dict[str, Any]:
         target = directory / f"{stem}-v{index}.zip"
         index += 1
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("research.json", json.dumps({
-            "projects": projects, "documents": documents, "memories": memories,
-            "generations": generations, "document_versions": versions,
-            "changes": changes, "conflicts": conflicts, "outbound_approvals": outbound,
-        }, ensure_ascii=False, indent=2))
         for document in documents:
             source = Path(document["stored_path"])
+            member = f"files/{document['id']}/{Path(document['original_filename']).name}"
             if source.is_file():
-                archive.write(source, f"files/{document['id']}/{document['original_filename']}")
+                archive.write(source, member)
             else:
                 manifest["missing_originals"].append({
                     "document_id": document["id"], "title": document["title"], "reason": "系统副本不存在",
                 })
+            document["stored_path"] = member
+        for version in versions:
+            source = Path(version["stored_path"])
+            member = f"version-files/{version['id']}/source"
+            if source.is_file():
+                archive.write(source, member)
+            else:
+                manifest["missing_originals"].append({"document_id": version["document_id"], "version": version["version"], "reason": "历史版本副本不存在"})
+            version["stored_path"] = member
+        archive.writestr("research.json", json.dumps({
+            "projects": projects, "documents": documents, "memories": memories,
+            "generations": generations, "document_versions": versions,
+            "changes": changes, "conflicts": conflicts, "outbound_approvals": outbound,
+            "chunks": chunks, "embeddings": embeddings, "conversations": conversations,
+            "messages": messages, "batches": batches, "batch_items": batch_items,
+            "security_events": security_events,
+            "async_tasks": async_tasks,
+        }, ensure_ascii=False, indent=2))
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+    target.chmod(0o600)
     return {
         "path": str(target), "filename": target.name, "size_bytes": target.stat().st_size,
         "document_count": len(documents), "missing_originals": manifest["missing_originals"],
+        "download_url": f"/api/research/export/full/download?filename={quote(target.name)}",
         "remote_exported": False, "contains_levels": manifest["confidentiality_counts"],
     }
 
