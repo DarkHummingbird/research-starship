@@ -8,7 +8,7 @@ import argparse
 import importlib
 import os
 
-from sqlalchemy import MetaData, Table, inspect, text
+from sqlalchemy import MetaData, Table, inspect, literal, text
 
 from app.data_access import public
 from app.data_access.session import _PRIVATE_TABLES
@@ -69,6 +69,35 @@ def _qualified(connection, name):
     return '"public".' + connection.dialect.identifier_preparer.quote_identifier(name)
 
 
+def _default_ddl(column, dialect) -> str:
+    if column.server_default is not None:
+        return f" DEFAULT {column.server_default.arg}"
+    if column.default is None or not getattr(column.default, "is_scalar", False):
+        return ""
+    return " DEFAULT " + str(literal(column.default.arg, type_=column.type).compile(
+        dialect=dialect, compile_kwargs={"literal_binds": True},
+    ))
+
+
+def _add_missing_columns(connection, metadata) -> None:
+    inspector = inspect(connection)
+    for table in metadata.sorted_tables:
+        if table.name not in PRIVATE_TABLES | ADMIN_TABLES:
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table.name, schema="public")}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            name = _qualified(connection, table.name)
+            column_name = connection.dialect.identifier_preparer.quote_identifier(column.name)
+            column_type = column.type.compile(connection.dialect)
+            default = _default_ddl(column, connection.dialect)
+            nullable = "" if column.nullable else " NOT NULL"
+            connection.exec_driver_sql(
+                f"ALTER TABLE {name} ADD COLUMN {column_name} {column_type}{default}{nullable}"
+            )
+
+
 def _owner_predicate(connection, table):
     uid = "NULLIF(current_setting('app.user_id', true), '')"
     quote = connection.dialect.identifier_preparer.quote_identifier
@@ -86,7 +115,7 @@ def _owner_predicate(connection, table):
 
 
 def upgrade(connection):
-    """Create private/admin tables, then install RLS/grants in the same transaction."""
+    """Create tables and missing columns, then install RLS/grants in one transaction."""
     if connection.dialect.name != "postgresql":
         raise ValueError("RLS migration requires PostgreSQL")
     connection.exec_driver_sql('SET LOCAL search_path TO public')
@@ -98,6 +127,7 @@ def upgrade(connection):
     metadata = private_metadata()
     metadata.create_all(connection, tables=[table for table in metadata.sorted_tables
                                            if table.name in PRIVATE_TABLES | ADMIN_TABLES])
+    _add_missing_columns(connection, metadata)
     if public.PUBLIC_TABLES - set(inspect(connection).get_table_names(schema="public")):
         raise ValueError("Registered public tables must exist before the RLS migration")
     connection.exec_driver_sql('REVOKE CREATE ON SCHEMA public FROM PUBLIC')

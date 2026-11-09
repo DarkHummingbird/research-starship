@@ -30,6 +30,8 @@ _PRIVATE_TABLES = {
     "proactive_items", "proactive_runs", "memory_facts", "memory_migration_receipts", "turn_results",
     "research_projects", "research_documents", "research_chunks", "research_memories",
     "research_conversations", "research_messages", "research_outbound_approvals", "research_security_events",
+    "research_embeddings", "research_generations", "research_conflicts", "research_document_versions",
+    "research_changes", "research_batches", "research_batch_items",
 }
 
 

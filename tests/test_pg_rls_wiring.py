@@ -51,6 +51,9 @@ def admin_migration(monkeypatch):
     existing = set(metadata.tables) - ADMIN_TABLES
     inspector = Mock()
     inspector.get_table_names.side_effect = lambda **kwargs: sorted(existing)
+    inspector.get_columns.side_effect = lambda table_name, schema=None: [
+        {"name": column.name} for column in metadata.tables[table_name].columns
+    ]
     monkeypatch.setattr(rls_migration, "inspect", lambda connection: inspector)
     monkeypatch.setattr(public, "PUBLIC_TABLES", frozenset())
     create = Mock(side_effect=lambda connection, tables: existing.update(t.name for t in tables))

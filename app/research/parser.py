@@ -5,6 +5,8 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from app.research.chunking import chunk_text, parent_metadata
+
 
 DOCUMENT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -139,6 +141,7 @@ def parse_markdown(
     version: int,
     title: str,
     confidentiality: str,
+    chunking_strategy: str = "auto",
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     heading_title = next((line[2:].strip() for line in lines if line.startswith("# ")), "")
@@ -161,33 +164,32 @@ def parse_markdown(
 
     chunks: list[dict[str, Any]] = []
     entries: list[dict[str, Any]] = []
-    for ordinal, (section_title, content_lines) in enumerate(sections, 1):
+    for section_ordinal, (section_title, content_lines) in enumerate(sections, 1):
         content = "\n".join(content_lines).strip()
-        chunk_id = f"{document_id}:v{version}:c{ordinal}"
-        chunk = {
-            "id": chunk_id,
-            "document_id": document_id,
-            "document_version": version,
-            "ordinal": ordinal,
-            "chapter": section_title,
-            "content": content,
-            "confidentiality": confidentiality,
-        }
-        chunks.append(chunk)
-        entries.append({
-            "entry_id": f"entry-{ordinal}",
-            "statement": content,
-            "confidentiality": confidentiality,
-            "review_status": "pending",
-            "suspicious": _suspicious(content),
-            "evidence": {
-                "document_id": document_id,
-                "version": version,
-                "chunk_id": chunk_id,
-                "chapter": section_title,
-                "quote": content,
-            },
-        })
+        parts = chunk_text(content, chunking_strategy)
+        for part_index, part in enumerate(parts, 1):
+            ordinal = len(chunks) + 1
+            chapter = section_title + (f"（片段 {part_index}）" if len(parts) > 1 else "")
+            chunk_id = f"{document_id}:v{version}:c{ordinal}"
+            chunks.append({
+                "id": chunk_id, "document_id": document_id, "document_version": version,
+                "ordinal": ordinal, "chapter": chapter, "content": part,
+                "confidentiality": confidentiality,
+                "locator_json": parent_metadata(
+                    parent_id=f"{document_id}:v{version}:p{section_ordinal}",
+                    parent_chapter=section_title, parent_content=content,
+                    strategy=chunking_strategy, locator={"chapter": section_title, "extraction": "markdown"},
+                ),
+            })
+            entries.append({
+                "entry_id": f"entry-{ordinal}", "statement": part,
+                "confidentiality": confidentiality, "review_status": "pending",
+                "suspicious": _suspicious(part),
+                "evidence": {
+                    "document_id": document_id, "version": version,
+                    "chunk_id": chunk_id, "chapter": chapter, "quote": part,
+                },
+            })
     card = {
         "schema_version": "research-document/v1",
         "title": heading_title or title,

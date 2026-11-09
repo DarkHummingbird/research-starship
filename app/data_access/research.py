@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import CheckConstraint, Index, Integer, String, Text, UniqueConstraint, create_engine, text
+from sqlalchemy import Boolean, CheckConstraint, Index, Integer, String, Text, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base as ResearchBase
@@ -22,6 +22,7 @@ class ResearchProject(ResearchBase):
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    current_baseline_id: Mapped[str] = mapped_column(String, default="")
 
 
 class ResearchDocument(ResearchBase):
@@ -41,6 +42,18 @@ class ResearchDocument(ResearchBase):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
     approved_version: Mapped[int | None] = mapped_column(Integer)
+    document_type: Mapped[str] = mapped_column(String, default="tutorial")
+    processing_status: Mapped[str] = mapped_column(String, default="ready")
+    embedding_status: Mapped[str] = mapped_column(String, default="not_started")
+    analysis_status: Mapped[str] = mapped_column(String, default="not_required")
+    analysis_json: Mapped[str] = mapped_column(Text, default="{}")
+    analysis_raw_json: Mapped[str] = mapped_column(Text, default="")
+    processing_error: Mapped[str] = mapped_column(Text, default="")
+    source_uri: Mapped[str] = mapped_column(String, default="")
+    extraction_model: Mapped[str] = mapped_column(String, default="")
+    deleted_at: Mapped[str] = mapped_column(String, default="")
+    delete_after: Mapped[str] = mapped_column(String, default="")
+    permanent_deleted_at: Mapped[str] = mapped_column(String, default="")
     __table_args__ = (CheckConstraint("confidentiality IN ('L1','L2','L3')"),)
 
 
@@ -55,10 +68,24 @@ class ResearchChunk(ResearchBase):
     chapter: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     confidentiality: Mapped[str] = mapped_column(String, nullable=False)
+    locator_json: Mapped[str] = mapped_column(Text, default="{}")
     __table_args__ = (
         UniqueConstraint("document_id", "document_version", "ordinal"),
         CheckConstraint("confidentiality IN ('L1','L2','L3')"),
     )
+
+
+class ResearchEmbedding(ResearchBase):
+    __tablename__ = "research_embeddings"
+    chunk_id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    vector_json: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class ResearchMemory(ResearchBase):
@@ -77,6 +104,8 @@ class ResearchMemory(ResearchBase):
     confidentiality: Mapped[str] = mapped_column(String, nullable=False)
     review_status: Mapped[str] = mapped_column(String, default="confirmed")
     confirmed_at: Mapped[str] = mapped_column(String, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    fact_json: Mapped[str] = mapped_column(Text, default="{}")
     __table_args__ = (
         UniqueConstraint("document_id", "document_version", "entry_id"),
         CheckConstraint("confidentiality IN ('L1','L2','L3')"),
@@ -104,6 +133,102 @@ class ResearchMessage(ResearchBase):
     sources_json: Mapped[str] = mapped_column(Text, default="[]")
     model: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class ResearchGeneration(ResearchBase):
+    __tablename__ = "research_generations"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    sources_json: Mapped[str] = mapped_column(Text, default="[]")
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    confidentiality: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    archived_document_id: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class ResearchConflict(ResearchBase):
+    __tablename__ = "research_conflicts"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    candidate_document_id: Mapped[str] = mapped_column(String, nullable=False)
+    existing_memory_id: Mapped[str] = mapped_column(String, nullable=False)
+    existing_fact_json: Mapped[str] = mapped_column(Text, nullable=False)
+    candidate_fact_json: Mapped[str] = mapped_column(Text, nullable=False)
+    comparability: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    resolution: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    resolved_at: Mapped[str] = mapped_column(String, default="")
+
+
+class ResearchDocumentVersion(ResearchBase):
+    __tablename__ = "research_document_versions"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_id: Mapped[str] = mapped_column(String, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    confidentiality: Mapped[str] = mapped_column(String, nullable=False)
+    parsed_json: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_json: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_raw_json: Mapped[str] = mapped_column(Text, default="")
+    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String, nullable=False)
+    stored_path: Mapped[str] = mapped_column(String, nullable=False)
+    document_type: Mapped[str] = mapped_column(String, nullable=False)
+    processing_status: Mapped[str] = mapped_column(String, nullable=False)
+    analysis_status: Mapped[str] = mapped_column(String, nullable=False)
+    extraction_model: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    operation: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class ResearchChange(ResearchBase):
+    __tablename__ = "research_changes"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    object_type: Mapped[str] = mapped_column(String, nullable=False)
+    object_id: Mapped[str] = mapped_column(String, nullable=False)
+    operation: Mapped[str] = mapped_column(String, nullable=False)
+    document_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    before_json: Mapped[str] = mapped_column(Text, nullable=False)
+    after_json: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    undone_at: Mapped[str] = mapped_column(String, default="")
+
+
+class ResearchBatch(ResearchBase):
+    __tablename__ = "research_batches"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    completed_at: Mapped[str] = mapped_column(String, default="")
+
+
+class ResearchBatchItem(ResearchBase):
+    __tablename__ = "research_batch_items"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String, nullable=False)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    document_id: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    started_at: Mapped[str] = mapped_column(String, default="")
+    completed_at: Mapped[str] = mapped_column(String, default="")
 
 
 class ResearchOutboundApproval(ResearchBase):
@@ -202,6 +327,34 @@ def init_db() -> None:
             engine = _engines[path]
         tables = [table for name, table in ResearchBase.metadata.tables.items() if name.startswith("research_")]
         ResearchBase.metadata.create_all(engine, tables=tables)
+        additions = {
+            "research_projects": {"current_baseline_id": "VARCHAR DEFAULT ''"},
+            "research_documents": {
+                "document_type": "VARCHAR DEFAULT 'tutorial'",
+                "processing_status": "VARCHAR DEFAULT 'ready'",
+                "embedding_status": "VARCHAR DEFAULT 'not_started'",
+                "analysis_status": "VARCHAR DEFAULT 'not_required'",
+                "analysis_json": "TEXT DEFAULT '{}'",
+                "analysis_raw_json": "TEXT DEFAULT ''",
+                "processing_error": "TEXT DEFAULT ''",
+                "source_uri": "VARCHAR DEFAULT ''",
+                "extraction_model": "VARCHAR DEFAULT ''",
+                "deleted_at": "VARCHAR DEFAULT ''",
+                "delete_after": "VARCHAR DEFAULT ''",
+                "permanent_deleted_at": "VARCHAR DEFAULT ''",
+            },
+            "research_memories": {
+                "active": "BOOLEAN DEFAULT 1",
+                "fact_json": "TEXT DEFAULT '{}'",
+            },
+            "research_chunks": {"locator_json": "TEXT DEFAULT '{}'"},
+        }
+        with engine.begin() as connection:
+            for table_name, columns in additions.items():
+                existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table_name})"))}
+                for name, ddl in columns.items():
+                    if name not in existing:
+                        connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {name} {ddl}"))
         _schema_paths.add(path)
 
 

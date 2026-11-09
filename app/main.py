@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.data_access import system_scope
 
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -88,6 +89,28 @@ app.add_exception_handler(research_gateway.PolicyError, research_policy_error_ha
 from app.session_identity import SESSION_COOKIE, SessionIdentityMiddleware, new_anonymous_user_id, session_user  # noqa: E402
 
 app.add_middleware(SessionIdentityMiddleware, router=app.router)
+
+
+@app.middleware("http")
+async def research_runtime_access_log(request, call_next):
+    if not request.url.path.startswith("/api/research/"):
+        return await call_next(request)
+    from app.research.runtime_log import log_request
+
+    started = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception:
+        log_request(
+            method=request.method, path=request.url.path, status_code=500,
+            elapsed_seconds=time.monotonic() - started,
+        )
+        raise
+    log_request(
+        method=request.method, path=request.url.path, status_code=response.status_code,
+        elapsed_seconds=time.monotonic() - started,
+    )
+    return response
 
 
 @app.post("/api/session")
@@ -372,6 +395,9 @@ def _startup() -> None:
     from app.agent.intent_scoring import warmup
     warmup()
     db.init_db()
+    from app.research.batches import recover_interrupted_batches
+
+    recover_interrupted_batches()
     # Ensure confirm / binding / memory tables exist
     from app.channels.binding import ChannelBinding  # noqa: F401
     from app.channels.conversation import ChannelConversation  # noqa: F401

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.auth import require_user
@@ -31,6 +31,11 @@ class DocumentUpdateBody(BaseModel):
     confidentiality: Literal["L1", "L2", "L3"] | None = None
 
 
+class AnalysisUpdateBody(BaseModel):
+    expected_version: int = Field(ge=1)
+    analysis: dict[str, Any]
+
+
 class ConversationBody(BaseModel):
     title: str = "新会话"
 
@@ -39,7 +44,7 @@ class ChatBody(BaseModel):
     message: str
     conversation_id: str | None = None
     cross_project_ids: list[str] = Field(default_factory=list, max_length=20)
-    provider: Literal["local", "external"] = "local"
+    provider: Literal["local", "rag", "external"] = "local"
     model_id: str = ""
     query_confidentiality: Literal["L1", "L2", "L3"] = "L1"
     task_id: str = ""
@@ -58,6 +63,79 @@ class OutboundPrepareBody(BaseModel):
 
 class OutboundDecisionBody(BaseModel):
     approved: bool
+
+
+class SourceRequest(BaseModel):
+    task_id: str = ""
+    approval_id: str = ""
+    confidentiality: Literal["L1", "L2", "L3"] = "L1"
+
+
+class ArxivSearchBody(SourceRequest):
+    query: str = Field(min_length=1, max_length=500)
+
+
+class ArxivImportBody(SourceRequest):
+    arxiv_id: str
+    version: int = Field(ge=1, le=999)
+
+
+class GithubImportBody(SourceRequest):
+    repository: str
+    ref: str = ""
+    paths: list[str] = Field(default_factory=list, max_length=5)
+
+
+class WebpageImportBody(SourceRequest):
+    url: str
+
+
+class GenerationBody(BaseModel):
+    kind: Literal["compare", "ablation", "table", "pseudocode", "review", "latex"]
+    query: str = ""
+    document_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class GenerationUpdateBody(BaseModel):
+    content: str = Field(min_length=1, max_length=100000)
+
+
+class StudyNoteBody(BaseModel):
+    title: str
+    content: str
+    document_type: Literal["baseline", "failure_experiment", "style_sample", "user_result"]
+    confidentiality: Literal["L1", "L2", "L3"] = "L2"
+
+
+class BaselineBody(BaseModel):
+    document_id: str
+
+
+class ExportBody(BaseModel):
+    filename: str = ""
+    overwrite: bool = False
+    confirm_overwrite: bool = False
+
+
+class ConflictResolutionBody(BaseModel):
+    resolution: Literal["overwrite", "discard", "keep_both", "edit"]
+    edited_fact: dict[str, Any] | None = None
+
+
+class BatchBody(BaseModel):
+    document_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class ConfirmActionBody(BaseModel):
+    confirmed: bool = True
+
+
+class DeleteDocumentBody(ConfirmActionBody):
+    expected_version: int = Field(ge=1)
+
+
+class RestoreVersionBody(DeleteDocumentBody):
+    target_version: int = Field(ge=1)
 
 
 def _data(data: Any, status: str = "ok", http_status: int = 200) -> JSONResponse:
@@ -85,15 +163,15 @@ def capabilities(uid: str = Depends(require_user)):
     models = [{
         "id": spec.id, "provider": spec.vendor, "base_url": spec.base_url, "configured": spec.has_key(),
     } for spec in get_config().models.values()]
+    from app.research.local_components import component_status
+
     return _data({
-        "mode": "research-p1",
+        "mode": "research-p4",
         "local": {
-            "markdown_parser": "available",
-            "retrieval": "local-lexical-v1",
-            "question_answering": "local-extractive-v1",
-            "ocr": "not_integrated",
-            "neural_embedding": "not_integrated",
-            "generative_llm": "not_integrated",
+            "document_parsers": ["markdown", "pdf", "docx", "tex", "csv", "html"],
+            "retrieval": "local-lexical+bge-m3",
+            "question_answering": "local-extractive+local-rag",
+            **component_status(),
         },
         "external_models": models,
         "automatic_memory_write": False,
@@ -127,12 +205,16 @@ async def import_document(
     project_id: str,
     file: UploadFile = File(...),
     confidentiality: Literal["L1", "L2", "L3"] = Form("L2"),
+    document_type: Literal["tutorial", "paper"] | None = Form(None),
+    chunking_strategy: Literal["auto", "parent_recursive", "recursive", "fixed", "semantic"] = Form("auto"),
     uid: str = Depends(require_user),
 ):
     content = await file.read(MAX_FILE_BYTES + 1)
     await file.close()
-    item = service.import_markdown(
-        uid, project_id, filename=file.filename or "", content=content, confidentiality=confidentiality
+    item = service.import_document(
+        uid, project_id, filename=file.filename or "", content=content,
+        confidentiality=confidentiality, document_type=document_type,
+        chunking_strategy=chunking_strategy,
     )
     return _data(item, "pending_review", 201)
 
@@ -150,6 +232,45 @@ def memories(project_id: str, uid: str = Depends(require_user)):
 @router.get("/documents/{document_id}")
 def document(document_id: str, uid: str = Depends(require_user)):
     return _data(service.get_document(uid, document_id))
+
+
+@router.get("/documents/{document_id}/source-file")
+def source_file(document_id: str, uid: str = Depends(require_user)):
+    from pathlib import Path
+
+    from app.data_access.research import migration_session
+
+    with migration_session() as conn:
+        row = service._document(conn, uid, document_id)
+        path = Path(row.stored_path)
+        filename = row.original_filename
+    if not path.is_file():
+        raise service.ResearchError(404, "source_file_missing", "系统副本不存在")
+    return FileResponse(path, filename=filename, content_disposition_type="inline")
+
+
+@router.post("/documents/{document_id}/ocr")
+def run_ocr(document_id: str, uid: str = Depends(require_user)):
+    from app.research.ocr import ocr_document
+
+    return _data(ocr_document(uid, document_id), "ocr_completed")
+
+
+@router.post("/documents/{document_id}/analysis")
+def analyze_document(document_id: str, uid: str = Depends(require_user)):
+    from app.research.paper_analysis import analyze_document as analyze
+
+    result = analyze(uid, document_id)
+    return _data(result, result["analysis_status"])
+
+
+@router.put("/documents/{document_id}/analysis")
+def edit_analysis(document_id: str, body: AnalysisUpdateBody, uid: str = Depends(require_user)):
+    from app.research.paper_analysis import update_analysis
+
+    return _data(update_analysis(
+        uid, document_id, expected_version=body.expected_version, payload=body.analysis,
+    ), "analysis_ready")
 
 
 @router.patch("/documents/{document_id}")
@@ -193,6 +314,253 @@ def chat(project_id: str, body: ChatBody, uid: str = Depends(require_user)):
         query_confidentiality=body.query_confidentiality, task_id=body.task_id, approval_id=body.approval_id,
     )
     return _data(result, result["status"])
+
+
+@router.post("/projects/{project_id}/study-notes")
+def create_study_note(project_id: str, body: StudyNoteBody, uid: str = Depends(require_user)):
+    from app.research.generations import create_study_note as create
+
+    return _data(create(
+        uid, project_id, title=body.title, content=body.content,
+        document_type=body.document_type, confidentiality=body.confidentiality,
+    ), "pending_review", 201)
+
+
+@router.post("/projects/{project_id}/baseline")
+def set_baseline(project_id: str, body: BaselineBody, uid: str = Depends(require_user)):
+    from app.research.generations import set_baseline as set_current
+
+    return _data(set_current(uid, project_id, body.document_id), "baseline_set")
+
+
+@router.post("/projects/{project_id}/generations")
+def generate(project_id: str, body: GenerationBody, uid: str = Depends(require_user)):
+    from app.research.generations import generate_output
+
+    return _data(generate_output(
+        uid, project_id, kind=body.kind, query=body.query, document_ids=body.document_ids,
+    ), "generated", 201)
+
+
+@router.get("/generations/{generation_id}")
+def generation_detail(generation_id: str, uid: str = Depends(require_user)):
+    from app.research.generations import _generation_public, get_generation
+
+    return _data(_generation_public(get_generation(uid, generation_id)))
+
+
+@router.put("/generations/{generation_id}")
+def update_generation(generation_id: str, body: GenerationUpdateBody, uid: str = Depends(require_user)):
+    from app.research.generations import update_generation as update
+
+    return _data(update(uid, generation_id, content=body.content), "pending_review")
+
+
+@router.get("/generations/{generation_id}/download")
+def download_generation(generation_id: str, filename: str = "", uid: str = Depends(require_user)):
+    from pathlib import Path
+
+    from app.research.generations import get_generation
+
+    row = get_generation(uid, generation_id)
+    if row.status == "rejected":
+        raise service.ResearchError(409, "generation_requires_correction", "拒绝稿须修正后才能下载")
+    suffix = ".tex" if row.kind == "latex" else ".md"
+    safe_name = Path(filename or f"{row.kind}{suffix}").name
+    directory = (store.data_dir() / "exports" / f"{uid}/{row.project_id}").resolve()
+    target = (directory / safe_name).resolve()
+    if target.parent != directory or not target.is_file():
+        raise service.ResearchError(404, "exported_file_missing", "导出文件不存在")
+    return FileResponse(target, filename=target.name)
+
+
+@router.post("/generations/{generation_id}/archive")
+def archive_generation(generation_id: str, uid: str = Depends(require_user)):
+    from app.research.generations import archive_generation as archive
+
+    return _data(archive(uid, generation_id), "pending_review", 201)
+
+
+@router.post("/generations/{generation_id}/export")
+def export_generation(generation_id: str, body: ExportBody, uid: str = Depends(require_user)):
+    from app.research.generations import export_generation as export
+
+    return _data(export(
+        uid, generation_id, filename=body.filename,
+        overwrite=body.overwrite, confirm_overwrite=body.confirm_overwrite,
+    ), "exported", 201)
+
+
+@router.get("/projects/{project_id}/conflicts")
+def conflicts(project_id: str, uid: str = Depends(require_user)):
+    from app.research.conflicts import list_conflicts
+
+    return _data({"items": list_conflicts(uid, project_id)})
+
+
+@router.post("/conflicts/{conflict_id}/resolve")
+def resolve_conflict(conflict_id: str, body: ConflictResolutionBody, uid: str = Depends(require_user)):
+    from app.research.conflicts import resolve_conflict as resolve
+
+    return _data(resolve(
+        uid, conflict_id, resolution=body.resolution, edited_fact=body.edited_fact,
+    ), "conflict_resolved")
+
+
+@router.post("/projects/{project_id}/batches")
+def create_batch(project_id: str, body: BatchBody, uid: str = Depends(require_user)):
+    from app.research.batches import create_batch as create
+
+    return _data(create(uid, project_id, body.document_ids), "queued", 202)
+
+
+@router.get("/batches/{batch_id}")
+def batch_detail(batch_id: str, uid: str = Depends(require_user)):
+    from app.research.batches import get_batch
+
+    return _data(get_batch(uid, batch_id))
+
+
+@router.post("/batch-items/{item_id}/retry")
+def retry_batch_item(item_id: str, uid: str = Depends(require_user)):
+    from app.research.batches import retry_batch_item as retry
+
+    return _data(retry(uid, item_id), "queued", 202)
+
+
+@router.get("/documents/{document_id}/versions")
+def document_versions(document_id: str, uid: str = Depends(require_user)):
+    from app.research.lifecycle import list_versions
+
+    return _data({"items": list_versions(uid, document_id)})
+
+
+@router.post("/documents/{document_id}/restore-version")
+def restore_version(document_id: str, body: RestoreVersionBody, uid: str = Depends(require_user)):
+    from app.research.lifecycle import restore_version as restore
+
+    return _data(restore(
+        uid, document_id, target_version=body.target_version,
+        expected_version=body.expected_version, confirmed=body.confirmed,
+    ), "restored")
+
+
+@router.post("/documents/{document_id}/delete")
+def delete_document(document_id: str, body: DeleteDocumentBody, uid: str = Depends(require_user)):
+    from app.research.lifecycle import delete_document as delete
+
+    return _data(delete(uid, document_id, expected_version=body.expected_version, confirmed=body.confirmed), "deleted")
+
+
+@router.post("/documents/{document_id}/restore")
+def restore_document(document_id: str, body: ConfirmActionBody, uid: str = Depends(require_user)):
+    from app.research.lifecycle import restore_document as restore
+
+    return _data(restore(uid, document_id, confirmed=body.confirmed), "restored")
+
+
+@router.delete("/documents/{document_id}/permanent")
+def permanent_delete_document(document_id: str, body: ConfirmActionBody, uid: str = Depends(require_user)):
+    from app.research.lifecycle import permanent_delete_document as permanent_delete
+
+    return _data(permanent_delete(uid, document_id, confirmed=body.confirmed), "permanently_deleted")
+
+
+@router.get("/projects/{project_id}/recycle-bin")
+def recycle_bin(project_id: str, uid: str = Depends(require_user)):
+    from app.research.lifecycle import list_recycle_bin
+
+    return _data({"items": list_recycle_bin(uid, project_id)})
+
+
+@router.get("/projects/{project_id}/changes")
+def changes(project_id: str, limit: int = Query(10, ge=1, le=10), uid: str = Depends(require_user)):
+    from app.research.lifecycle import list_changes
+
+    return _data({"items": list_changes(uid, project_id, limit=limit)})
+
+
+@router.post("/changes/{change_id}/undo")
+def undo_change(change_id: str, body: ConfirmActionBody, uid: str = Depends(require_user)):
+    from app.research.lifecycle import undo_change as undo
+
+    return _data(undo(uid, change_id, confirmed=body.confirmed), "undone")
+
+
+@router.post("/export")
+def export_library(body: ConfirmActionBody, uid: str = Depends(require_user)):
+    from app.research.backup import export_library as export
+
+    return _data(export(uid, confirmed=body.confirmed), "exported", 201)
+
+
+@router.post("/export/light")
+def export_lightweight(body: ConfirmActionBody, uid: str = Depends(require_user)):
+    from app.research.backup import export_lightweight as export
+
+    return _data(export(uid, confirmed=body.confirmed), "exported", 201)
+
+
+@router.get("/export/light/download")
+def download_lightweight(filename: str, uid: str = Depends(require_user)):
+    from pathlib import Path
+
+    safe_name = Path(filename).name
+    directory = (store.data_dir() / "exports" / uid).resolve()
+    target = (directory / safe_name).resolve()
+    if target.parent != directory or not target.is_file():
+        raise service.ResearchError(404, "backup_file_missing", "备份文件不存在")
+    return FileResponse(target, filename=target.name)
+
+
+@router.post("/projects/{project_id}/sources/arxiv/search")
+def arxiv_search(project_id: str, body: ArxivSearchBody, uid: str = Depends(require_user)):
+    from app.research.external_sources import search_arxiv
+
+    result = search_arxiv(
+        uid, project_id, query=body.query, level=body.confidentiality,
+        task_id=body.task_id, approval_id=body.approval_id,
+    )
+    return _data(result, result["status"])
+
+
+@router.post("/projects/{project_id}/sources/arxiv/import")
+def arxiv_import(project_id: str, body: ArxivImportBody, uid: str = Depends(require_user)):
+    from app.research.external_sources import import_arxiv_paper
+
+    result = import_arxiv_paper(
+        uid, project_id, arxiv_id=body.arxiv_id, version=body.version,
+        level=body.confidentiality, task_id=body.task_id, approval_id=body.approval_id,
+    )
+    return _data(result, result["status"], 201 if result["status"] == "pending_review" else 200)
+
+
+@router.post("/projects/{project_id}/sources/github/import")
+def github_import(project_id: str, body: GithubImportBody, uid: str = Depends(require_user)):
+    from app.research.external_sources import import_github_repository
+
+    result = import_github_repository(
+        uid, project_id, repository=body.repository, ref=body.ref, paths=body.paths,
+        level=body.confidentiality, task_id=body.task_id, approval_id=body.approval_id,
+    )
+    return _data(result, result["status"], 201 if result["status"] == "pending_review" else 200)
+
+
+@router.post("/projects/{project_id}/sources/webpage/import")
+def webpage_import(project_id: str, body: WebpageImportBody, uid: str = Depends(require_user)):
+    from app.crawl.errors import CrawlError
+    from app.research.external_sources import import_webpage
+
+    try:
+        result = import_webpage(
+            uid, project_id, url=body.url, level=body.confidentiality,
+            task_id=body.task_id, approval_id=body.approval_id,
+        )
+    except CrawlError as exc:
+        raise service.ResearchError(400, "webpage_url_forbidden", str(exc)) from exc
+    except ValueError as exc:
+        raise service.ResearchError(400, "webpage_request_invalid", str(exc)) from exc
+    return _data(result, result["status"], 201 if result["status"] == "pending_review" else 200)
 
 
 @router.post("/outbound/prepare")

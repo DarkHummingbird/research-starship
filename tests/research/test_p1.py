@@ -330,7 +330,9 @@ def test_research_requests_bypass_external_observability(client, user, research_
     assert capabilities["automatic_memory_write"] is False
     assert capabilities["automatic_summary"] is False
     assert capabilities["automatic_model_fallback"] is False
-    assert capabilities["local"]["ocr"] == "not_integrated"
+    assert capabilities["local"]["ocr"]["mode"] == "offline_subprocess"
+    assert capabilities["local"]["embedding"]["mode"] == "offline_subprocess"
+    assert capabilities["local"]["rerank"]["available"] is False
 
 
 def test_rejected_document_never_enters_memory(client, user, research_dir):

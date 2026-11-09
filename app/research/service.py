@@ -70,13 +70,13 @@ def list_projects(user_id: str) -> list[dict[str, Any]]:
         for row in rows:
             item = store.model_dict(row)
             item["document_count"] = conn.scalar(select(func.count(store.ResearchDocument.id)).where(
-                store.ResearchDocument.project_id == row.id
+                store.ResearchDocument.project_id == row.id, store.ResearchDocument.status != "deleted"
             ))
             item["pending_count"] = conn.scalar(select(func.count(store.ResearchDocument.id)).where(
                 store.ResearchDocument.project_id == row.id, store.ResearchDocument.status == "pending"
             ))
             item["memory_count"] = conn.scalar(select(func.count(store.ResearchMemory.id)).where(
-                store.ResearchMemory.project_id == row.id
+                store.ResearchMemory.project_id == row.id, store.ResearchMemory.active.is_(True)
             ))
             result.append(item)
         return result
@@ -90,64 +90,38 @@ def import_markdown(
     content: bytes,
     confidentiality: str = "L2",
 ) -> dict[str, Any]:
-    if confidentiality not in gateway.LEVELS:
-        raise ResearchError(400, "invalid_confidentiality", "保密等级必须为 L1、L2 或 L3")
-    safe_name = Path(filename or "").name
-    if not safe_name or Path(safe_name).suffix.lower() not in (".md", ".markdown"):
-        raise ResearchError(415, "markdown_only", "P1 仅支持 Markdown（.md/.markdown）资料")
-    if not content or len(content) > 100 * 1024 * 1024:
-        raise ResearchError(413 if content else 400, "invalid_file_size", "文件须大于 0 字节且不超过 100 MiB")
-    try:
-        text = content.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise ResearchError(422, "invalid_utf8", "Markdown 须使用 UTF-8 编码") from exc
-    document_id = _id("doc_")
-    digest = hashlib.sha256(content).hexdigest()
-    title = safe_name.rsplit(".", 1)[0]
-    parsed, chunks = parse_markdown(
-        text, document_id=document_id, version=1, title=title, confidentiality=confidentiality
+    return import_document(
+        user_id, project_id, filename=filename, content=content,
+        confidentiality=confidentiality, document_type="tutorial",
     )
-    now = store.utc_now()
-    owner_dir = hashlib.sha256(f"{user_id}/{project_id}".encode()).hexdigest()[:24]
-    directory = store.data_dir() / "files" / owner_dir
-    directory.mkdir(parents=True, exist_ok=True)
-    stored_path = directory / f"{document_id}-v1-{safe_name}"
-    with memory_session() as conn:
-        _project(conn, user_id, project_id)
-        duplicate = conn.execute(select(store.ResearchDocument).where(
-            store.ResearchDocument.user_id == user_id,
-            store.ResearchDocument.project_id == project_id,
-            store.ResearchDocument.sha256 == digest,
-        )).scalars().first()
-        stored_path.write_bytes(content)
-        row = store.ResearchDocument(
-            id=document_id, user_id=user_id, project_id=project_id, title=parsed["title"],
-            original_filename=safe_name, stored_path=str(stored_path), source_text=text, sha256=digest,
-            confidentiality=confidentiality, version=1, status="pending",
-            parsed_json=json.dumps(parsed, ensure_ascii=False), created_at=now, updated_at=now,
-        )
-        conn.add(row)
-        conn.flush()
-        for chunk in chunks:
-            conn.add(store.ResearchChunk(
-                id=chunk["id"], user_id=user_id, project_id=project_id, document_id=document_id,
-                document_version=1, ordinal=chunk["ordinal"], chapter=chunk["chapter"],
-                content=chunk["content"], confidentiality=confidentiality,
-            ))
-        conn.flush()
-        result = store.public_document(row, include_text=True)
-        if duplicate is not None:
-            result["duplicate_of"] = {
-                "id": duplicate.id, "title": duplicate.title, "version": duplicate.version, "status": duplicate.status,
-            }
-        return result
+
+
+def import_document(
+    user_id: str,
+    project_id: str,
+    *,
+    filename: str,
+    content: bytes,
+    confidentiality: str = "L2",
+    document_type: str | None = None,
+    source_uri: str = "",
+    chunking_strategy: str = "auto",
+) -> dict[str, Any]:
+    from app.research.ingest import import_document as ingest
+
+    return ingest(
+        user_id, project_id, filename=filename, content=content,
+        confidentiality=confidentiality, document_type=document_type, source_uri=source_uri,
+        chunking_strategy=chunking_strategy,
+    )
 
 
 def list_documents(user_id: str, project_id: str) -> list[dict[str, Any]]:
     with migration_session() as conn:
         _project(conn, user_id, project_id)
         rows = conn.execute(select(store.ResearchDocument).where(
-            store.ResearchDocument.user_id == user_id, store.ResearchDocument.project_id == project_id
+            store.ResearchDocument.user_id == user_id, store.ResearchDocument.project_id == project_id,
+            store.ResearchDocument.status != "deleted",
         ).order_by(store.ResearchDocument.created_at.desc())).scalars().all()
         return [store.public_document(row) for row in rows]
 
@@ -163,6 +137,7 @@ def get_document(user_id: str, document_id: str) -> dict[str, Any]:
         item["sources"] = [{
             "id": source.id, "document_version": source.document_version, "ordinal": source.ordinal,
             "chapter": source.chapter, "content": source.content, "confidentiality": source.confidentiality,
+            "locator": store.json_value(source.locator_json, {}),
         } for source in sources]
         item["system_copy_sha256"] = hashlib.sha256(Path(row.stored_path).read_bytes()).hexdigest()
         item["system_copy_matches_original"] = item["system_copy_sha256"] == row.sha256
@@ -183,6 +158,10 @@ def update_document(
         row = _document(conn, user_id, document_id)
         if row.version != expected_version:
             raise ResearchError(409, "document_version_changed", "资料版本已变化，请重新预览")
+        from app.research.lifecycle import document_state, snapshot
+
+        before = document_state(row)
+        snapshot(conn, row, "before_update")
         new_title = (title if title is not None else row.title).strip()
         if not new_title or len(new_title) > 300:
             raise ResearchError(400, "invalid_document_title", "资料标题须为 1–300 个字符")
@@ -218,16 +197,28 @@ def update_document(
                 id=chunk["id"], user_id=user_id, project_id=chunk["project_id"], document_id=document_id,
                 document_version=new_version, ordinal=chunk["ordinal"], chapter=chunk["chapter"],
                 content=chunk["content"], confidentiality=new_level,
+                locator_json=chunk.get("locator_json") or "{}",
             ))
         conn.flush()
-        return store.public_document(row, include_text=True)
+        after = document_state(row)
+        from app.research.lifecycle import record_change
+
+        result = {**after, "change": record_change(conn, row, operation="update", before=before, after=after)}
+    from app.research.ingest import index_document
+
+    result["embedding_status"] = index_document(user_id, document_id)["embedding_status"]
+    return result
 
 
 def review_document(user_id: str, document_id: str, *, expected_version: int, approved: bool) -> dict[str, Any]:
-    with memory_session() as conn:
+    with memory_session(commit_on=(ResearchError,)) as conn:
         row = _document(conn, user_id, document_id)
         if row.version != expected_version:
             raise ResearchError(409, "document_version_changed", "资料版本已变化，原审核预览失效")
+        if approved and row.processing_status != "ready":
+            raise ResearchError(409, "document_processing_incomplete", "解析或 OCR 尚未完成，不能确认入库")
+        if approved and row.document_type == "paper" and row.analysis_status != "ready":
+            raise ResearchError(409, "paper_analysis_required", "论文结构化分析尚未通过校验，请先完成分析或人工修正")
         if approved and row.status == "approved" and row.approved_version == expected_version:
             result = store.public_document(row)
             result["idempotent"] = True
@@ -236,6 +227,10 @@ def review_document(user_id: str, document_id: str, *, expected_version: int, ap
             result = store.public_document(row)
             result["idempotent"] = True
             return result
+        from app.research.lifecycle import document_state, snapshot
+
+        before = document_state(row)
+        snapshot(conn, row, "before_review")
         now = store.utc_now()
         if not approved:
             conn.execute(delete(store.ResearchMemory).where(store.ResearchMemory.document_id == document_id))
@@ -253,6 +248,9 @@ def review_document(user_id: str, document_id: str, *, expected_version: int, ap
                 validate_document_card(parsed, chunk_dicts)
             except ValueError as exc:
                 raise ResearchError(422, "invalid_extraction", f"结构化结果或来源校验失败：{exc}") from exc
+            from app.research.conflicts import check_document_conflicts
+
+            check_document_conflicts(conn, user_id, row)
             by_chunk = {chunk.id: chunk for chunk in chunks}
             for entry in parsed["entries"]:
                 evidence = entry["evidence"]
@@ -264,11 +262,40 @@ def review_document(user_id: str, document_id: str, *, expected_version: int, ap
                     record_type=parsed["record_type"], confidentiality=row.confidentiality,
                     review_status="confirmed", confirmed_at=now,
                 ))
+            if row.document_type == "paper":
+                from app.research.paper_analysis import FIELDS, validate_analysis
+
+                analysis = store.json_value(row.analysis_json, {})
+                try:
+                    validate_analysis(analysis, chunk_dicts)
+                except ValueError as exc:
+                    raise ResearchError(422, "invalid_extraction", f"论文分析或来源校验失败：{exc}") from exc
+                for field in FIELDS:
+                    for index, fact in enumerate(analysis[field], 1):
+                        chunk = by_chunk[fact["evidence"]["chunk_id"]]
+                        statement = fact["statement"]
+                        if fact.get("value") is not None:
+                            statement += f"（{fact['value']}{fact.get('unit') or ''}）"
+                        conn.add(store.ResearchMemory(
+                            id=_id("mem_"), user_id=user_id, project_id=row.project_id, document_id=document_id,
+                            document_version=expected_version, chunk_id=chunk.id, entry_id=f"{field}-{index}",
+                            title=parsed["title"], statement=statement, chapter=chunk.chapter,
+                            record_type="paper_statement", confidentiality=row.confidentiality,
+                            review_status="confirmed", confirmed_at=now, fact_json=json.dumps(fact, ensure_ascii=False),
+                        ))
+                from app.research.conflicts import apply_conflict_resolutions
+
+                apply_conflict_resolutions(conn, user_id, document_id)
             row.status = "approved"
             row.approved_version = expected_version
             row.updated_at = now
         conn.flush()
-        result = store.public_document(row)
+        after = document_state(row)
+        from app.research.lifecycle import record_change
+
+        result = {**after, "change": record_change(
+            conn, row, operation="approve" if approved else "reject", before=before, after=after,
+        )}
         result["idempotent"] = False
         return result
 
@@ -303,6 +330,8 @@ def search_confirmed(
     cross_project_ids: list[str] | None = None,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
+    from app.research.local_components import LocalComponentError, component_status, embed_texts
+
     project_ids = [project_id] + [item for item in (cross_project_ids or []) if item != project_id]
     with migration_session() as conn:
         for item in project_ids:
@@ -315,31 +344,60 @@ def search_confirmed(
             .where(
                 store.ResearchMemory.user_id == user_id,
                 store.ResearchMemory.project_id.in_(project_ids),
+                store.ResearchMemory.active.is_(True),
                 store.ResearchDocument.status == "approved",
                 store.ResearchDocument.version == store.ResearchMemory.document_version,
                 store.ResearchDocument.approved_version == store.ResearchMemory.document_version,
             ).order_by(store.ResearchMemory.confirmed_at.desc())
         ).all()
+        chunk_ids = [chunk.id for _, chunk, _ in rows]
+        embeddings = conn.execute(select(store.ResearchEmbedding).where(
+            store.ResearchEmbedding.user_id == user_id,
+            store.ResearchEmbedding.chunk_id.in_(chunk_ids),
+        )).scalars().all() if chunk_ids else []
     query_terms = _terms(query)
     if not query_terms:
         return []
+    vector_by_chunk = {row.chunk_id: store.json_value(row.vector_json, []) for row in embeddings}
+    query_vector: list[float] = []
+    retrieval = "local-lexical-v1"
+    if vector_by_chunk and component_status()["embedding"]["available"]:
+        try:
+            query_vector = embed_texts([query])["vectors"][0]
+            retrieval = "bge-m3+lexical"
+        except LocalComponentError:
+            query_vector = []
     quantity_question = bool(re.search(r"多少|几个|数量|上限", query))
     ranked: list[dict[str, Any]] = []
     for memory, chunk, document in rows:
         content_terms = _terms(chunk.content)
         matched = query_terms & content_terms
         coverage = len(matched) / len(query_terms)
-        if coverage < 0.16:
+        vector = vector_by_chunk.get(chunk.id) if query_vector else []
+        semantic = sum(q * float(v) for q, v in zip(query_vector, vector, strict=False)) if vector else 0.0
+        if not vector and coverage < 0.16:
             continue
-        if quantity_question and not re.search(r"\d|数量|上限|最多|最少|多个", chunk.content):
+        if vector and coverage < 0.16 and semantic < 0.25:
             continue
-        score = coverage + len(matched) / max(1, len(content_terms)) ** 0.5 * 0.05
+        if quantity_question and not re.search(r"\d+\s*(?:个|篇|项|条|种|天|年|月|日|%|GB|MB)|数量|上限|最多|最少|多个|无限", chunk.content):
+            continue
+        if quantity_question and "课题" in query and not re.search(
+            r"(?:\d+|多个|无限|无上限)[^。\n]{0,20}课题|课题[^。\n]{0,20}(?:\d+|多个|无限|无上限|上限)", chunk.content
+        ):
+            continue
+        lexical_score = coverage + len(matched) / max(1, len(content_terms)) ** 0.5 * 0.05
+        score = semantic * 0.8 + coverage * 0.2 if vector else lexical_score
+        locator = store.json_value(chunk.locator_json, {})
         ranked.append({
             "memory_id": memory.id, "project_id": memory.project_id, "document_id": memory.document_id,
             "document_version": memory.document_version, "chunk_id": memory.chunk_id, "title": memory.title,
             "chapter": memory.chapter, "confidentiality": memory.confidentiality, "content": chunk.content,
             "original_filename": document.original_filename, "score": round(score, 6),
-            "matched_terms": sorted(matched),
+            "matched_terms": sorted(matched), "retrieval": retrieval if vector else "local-lexical-v1",
+            "semantic_score": round(semantic, 6) if vector else None,
+            "parent_id": locator.get("parent_id", ""),
+            "parent_content": locator.get("parent_content", ""),
+            "locator": locator,
         })
     ranked.sort(key=lambda item: item["score"], reverse=True)
     return ranked[:limit]
@@ -402,6 +460,7 @@ def _sources(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "document_id": item["document_id"], "version": item["document_version"], "chunk_id": item["chunk_id"],
         "title": item["title"], "chapter": item["chapter"], "quote": item["content"],
         "confidentiality": item["confidentiality"], "project_id": item["project_id"],
+        "locator": item.get("locator") or {}, "retrieval": item.get("retrieval") or "local-lexical-v1",
     } for item in matches]
 
 
@@ -507,6 +566,16 @@ def chat(
             "以上为来源原文摘录，不是新增实验结论。\n\n【请复核，存在幻觉风险】"
         )
         model = "local-extractive-v1"
+    elif provider == "rag":
+        from app.research.local_components import LocalComponentError
+        from app.research.rag import answer as rag_answer
+
+        try:
+            generated = rag_answer(message, matches)
+        except LocalComponentError as exc:
+            raise ResearchError(503, "local_model_unavailable", f"本地 RAG 暂停：{exc.message}") from exc
+        answer = generated["text"]
+        model = generated["model"]
     elif provider == "external":
         actual_provider, destination = _model_destination(model_id)
         fragments = [_outbound_fragment(item) for item in matches]

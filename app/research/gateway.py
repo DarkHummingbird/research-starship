@@ -5,7 +5,7 @@ import json
 import uuid
 from typing import Any, Callable
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from app.data_access.research import memory_session, migration_session
 from app.research import store
@@ -52,6 +52,10 @@ def _log(
 ) -> None:
     snippet = "\n".join(str(item.get("snippet") or "") for item in fragments)[:1000]
     digest = hashlib.sha256(snippet.encode("utf-8")).hexdigest()
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=180)).isoformat()
+    conn.execute(delete(store.ResearchSecurityEvent).where(store.ResearchSecurityEvent.created_at < cutoff))
     conn.add(store.ResearchSecurityEvent(
         user_id=user_id, project_id=project_id, conversation_id=conversation_id, approval_id=approval_id,
         classification=classification, operation=operation, provider=provider, purpose=purpose, outcome=outcome,
@@ -235,7 +239,10 @@ def execute_once(user_id: str, approval_id: str, sender: Callable[[dict[str, Any
                 provider=approval["provider"], purpose=approval["purpose"], outcome="send_failed_no_retry",
                 fragments=approval["scope"]["fragments"],
             )
-        raise PolicyError(502, "external_call_failed_no_retry", "外部调用失败；私有材料未自动重试或切换服务商") from exc
+        raise PolicyError(
+            502, "external_call_failed_no_retry", "外部调用失败；系统已按该任务的保密和重试策略停止",
+            error_type=type(exc).__name__,
+        ) from exc
     with memory_session() as conn:
         conn.execute(update(store.ResearchOutboundApproval).where(
             store.ResearchOutboundApproval.id == approval_id,
