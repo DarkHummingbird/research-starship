@@ -57,6 +57,7 @@ class ChatRequest(BaseModel):
     thread_id: Optional[str] = None
     request_id: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     message: str
+    attachment_ids: list[str] = Field(default_factory=list, max_length=1)
     # Set when the message answers a question card: {"ask_id", "question", "type", "prompt"}
     reply_to: Optional[dict[str, Any]] = None
 

@@ -49,6 +49,10 @@ class CrawlStore:
                        (adapter, key, expires, json.dumps(payload)))
 
     def reserve(self, scope, period, amount, cap):
+        if amount == 0:
+            with self.connect() as db:
+                row = db.execute("SELECT used FROM crawl_quota WHERE scope=? AND period=?", (scope, period)).fetchone()
+                return (row[0] if row else 0) <= cap
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT OR IGNORE INTO crawl_quota VALUES (?, ?, 0)", (scope, period))

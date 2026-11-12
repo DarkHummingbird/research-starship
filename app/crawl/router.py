@@ -64,13 +64,15 @@ class CrawlRouter:
 
     def _route(self, name, params):
         if name in {"web", "search"}:
-            choices = ["web.trafilatura", "web.crawl4ai", "web.jina"] if name == "web" else ["search.searxng", "search.jina"]
+            choices = ["web.trafilatura", "web.crawl4ai", "web.deepseek", "web.jina"] if name == "web" else ["search.searxng", "search.deepseek", "search.jina"]
             if name == "search":
                 key = cache_key(params, {"searxng": os.getenv("SEARXNG_URL", "")})
                 cached = self.store.get(name, key, self.clock())
                 if cached is not None:
                     policies = {}
                     for choice in choices:
+                        if choice not in cached["policies"] and choice != cached["result"]["policy"]["adapter"]:
+                            continue
                         policy = get_policy(choice, self.config)
                         flags = {"adapter": choice, **policy.public()}
                         if not policy.enabled:

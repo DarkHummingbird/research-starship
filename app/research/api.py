@@ -107,11 +107,22 @@ class GenerationUpdateBody(BaseModel):
     content: str = Field(min_length=1, max_length=100000)
 
 
+class NoteSourceBody(BaseModel):
+    document_id: str
+    version: int = Field(ge=1)
+    chunk_id: str
+    quote: str = Field(min_length=1, max_length=20000)
+    locator: dict[str, Any] = Field(default_factory=dict)
+
+
 class StudyNoteBody(BaseModel):
     title: str
     content: str
-    document_type: Literal["baseline", "failure_experiment", "style_sample", "user_result"]
+    document_type: Literal["research_note", "baseline", "failure_experiment", "style_sample", "user_result"]
     confidentiality: Literal["L1", "L2", "L3"] = "L2"
+    note_type: Literal["source_fact", "ai_summary", "experiment_idea", "user_record"] = "user_record"
+    source_refs: list[NoteSourceBody] = Field(default_factory=list, max_length=20)
+    model_info: dict[str, Any] = Field(default_factory=dict)
 
 
 class BaselineBody(BaseModel):
@@ -132,6 +143,7 @@ class ConflictResolutionBody(BaseModel):
 class BatchBody(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=20)
     reanalyze: bool = False
+    operation: Literal["analysis", "reanalyze", "reindex"] = "analysis"
 
 
 class ConfirmActionBody(BaseModel):
@@ -150,6 +162,12 @@ class DeleteDocumentBody(ConfirmActionBody):
 
 class RestoreVersionBody(DeleteDocumentBody):
     target_version: int = Field(ge=1)
+
+
+class IndexDocumentBody(BaseModel):
+    expected_version: int = Field(ge=1)
+    task_id: str = ""
+    approval_id: str = ""
 
 
 def _data(data: Any, status: str = "ok", http_status: int = 200) -> JSONResponse:
@@ -177,15 +195,38 @@ def capabilities(uid: str = Depends(require_user)):
     models = [{
         "id": spec.id, "provider": spec.vendor, "base_url": spec.base_url, "configured": spec.has_key(),
     } for spec in get_config().models.values()]
+    from sqlalchemy import select
+    from app.data_access.research import migration_session
     from app.research.local_components import component_status
+    from app.research.online import embedding_spec, rerank_spec
+
+    embedding = embedding_spec()
+    rerank = rerank_spec()
+    components = component_status()
+    with migration_session() as conn:
+        existing_models = list(conn.execute(select(store.ResearchEmbedding.model).where(
+            store.ResearchEmbedding.user_id == uid,
+        ).distinct()).scalars())
 
     return _data({
-        "mode": "research-p4",
+        "mode": "research-v1.4",
+        "preferred_channel": "online_api",
+        "local_required_for": ["L3"],
+        "provider_configuration": "after_install",
+        "online_services": {
+            "generation": {"configured": any(model["configured"] for model in models)},
+            "embedding": {"configured": embedding.has_key(), "model": embedding.model, "provider": embedding.vendor},
+            "rerank": {"configured": rerank.has_key(), "model": rerank.model, "provider": rerank.vendor},
+        },
+        "indexing": {
+            "current_model": embedding.model if embedding.has_key() else components["embedding"]["model"],
+            "existing_models": existing_models,
+        },
         "local": {
             "document_parsers": ["markdown", "pdf", "docx", "tex", "csv", "html"],
-            "retrieval": "local-lexical+bge-m3",
-            "question_answering": "local-extractive+local-rag",
-            **component_status(),
+            "retrieval": "lexical+configurable-embedding+optional-rerank",
+            "question_answering": "extractive+local-or-online-generation",
+            **components,
         },
         "external_models": models,
         "automatic_memory_write": False,
@@ -193,6 +234,13 @@ def capabilities(uid: str = Depends(require_user)):
         "automatic_model_fallback": False,
         "user_id": uid,
     })
+
+
+@router.post("/setup/check")
+def check_online_services(uid: str = Depends(require_user)):
+    from app.research.online import check_services
+
+    return _data(check_services())
 
 
 @router.get("/projects")
@@ -353,6 +401,21 @@ def review_document(document_id: str, body: DocumentReviewBody, uid: str = Depen
     return _data(item, "approved" if body.approved else "rejected")
 
 
+@router.post("/documents/{document_id}/index")
+def index_document(document_id: str, body: IndexDocumentBody, uid: str = Depends(require_user)):
+    from app.research.ingest import index_document as index
+
+    result = index(
+        uid, document_id, expected_version=body.expected_version,
+        task_id=body.task_id, approval_id=body.approval_id,
+    )
+    if result["embedding_status"] == "missing":
+        raise service.ResearchError(404, "document_not_found", "资料不存在或不属于当前用户")
+    if result["embedding_status"] == "stale":
+        raise service.ResearchError(409, "document_version_changed", "资料版本已变化，请重新检查")
+    return _data(result, result["embedding_status"])
+
+
 @router.post("/projects/{project_id}/conversations")
 def new_conversation(project_id: str, body: ConversationBody | None = None, uid: str = Depends(require_user)):
     title = body.title if body else "新会话"
@@ -386,6 +449,8 @@ def create_study_note(project_id: str, body: StudyNoteBody, uid: str = Depends(r
     return _data(create(
         uid, project_id, title=body.title, content=body.content,
         document_type=body.document_type, confidentiality=body.confidentiality,
+        note_type=body.note_type, source_refs=[ref.model_dump() for ref in body.source_refs],
+        model_info=body.model_info,
     ), "pending_review", 201)
 
 
@@ -474,7 +539,8 @@ def resolve_conflict(conflict_id: str, body: ConflictResolutionBody, uid: str = 
 def create_batch(project_id: str, body: BatchBody, uid: str = Depends(require_user)):
     from app.research.batches import create_batch as create
 
-    return _data(create(uid, project_id, body.document_ids, operation="reanalyze" if body.reanalyze else "analysis"), "queued", 202)
+    operation = "reanalyze" if body.reanalyze else body.operation
+    return _data(create(uid, project_id, body.document_ids, operation=operation), "queued", 202)
 
 
 @router.get("/batches/{batch_id}")
@@ -549,6 +615,8 @@ def create_webpage_task(project_id: str, body: WebpageImportBody, uid: str = Dep
 
 @router.post("/backup-tasks/{backup_kind}")
 def create_backup_task(backup_kind: Literal['full', 'light'], body: ConfirmActionBody, uid: str = Depends(require_user)):
+    if backup_kind == 'full':
+        raise service.ResearchError(410, 'full_backup_removed', '完整备份功能已移除，请使用轻量导出')
     if not body.confirmed:
         raise service.ResearchError(409, 'export_confirmation_required', '请确认创建备份')
     from app.research.async_tasks import create
@@ -670,9 +738,7 @@ def undo_change(change_id: str, body: ConfirmActionBody, uid: str = Depends(requ
 
 @router.post("/export")
 def export_library(body: ConfirmActionBody, uid: str = Depends(require_user)):
-    from app.research.backup import export_library as export
-
-    return _data(export(uid, confirmed=body.confirmed), "exported", 201)
+    raise service.ResearchError(410, "full_backup_removed", "完整备份功能已移除，请使用轻量导出")
 
 
 @router.post("/export/light")

@@ -103,6 +103,7 @@ const responses = {
   '/api/session': {},
   '/api/research/projects': {items: []},
   '/api/research/tasks': {items: []},
+  '/api/research/capabilities': {external_models: [{id: 'qwen-plus', provider: 'qwen', configured: true}]},
 };
 const context = vm.createContext({
   document,
@@ -188,11 +189,35 @@ await vm.runInContext(`viewAsyncTask({project_id:'', kind:'arxiv_search', status
 assert.equal(detailsNode.open, true);
 assert.equal(get('arxivCandidates').children.length, 1);
 assert.equal(document.activeElement, get('arxivCandidates'));
-await vm.runInContext(`viewAsyncTask({project_id:'',kind:'restore_preview',status:'completed',result:{project_count:1,document_count:2,memory_count:0,version_count:0,notice:'测试预览',can_restore:true},request:{}})`, context);
-assert.equal(get('restorePreview').hidden, false);
-assert.equal(get('restoreCommit').disabled, true);
-assert.equal(document.activeElement, get('restoreSummary'));
+assert.equal(get('provider').value, 'external');
+get('queryLevel').value = 'L3';
+await get('queryLevel').fire('change');
+assert.equal(get('provider').value, 'rag');
+assert.equal(get('modelField').hidden, true);
+
+const noteRoot = new Node('article');
+context.noteRoot = noteRoot;
+vm.runInContext('appendNoteSaver(noteRoot, "需要保存的回答", "研究问题", [])', context);
+const noteDetails = noteRoot.children[0];
+assert.equal(noteDetails.children[0].textContent, '保存为课题笔记');
+assert.equal(noteDetails.children[2].children[1].children[0].value, '需要保存的回答');
 
 vm.runInContext("approvalReturnKey = 'async-test-task-view'; approvalReturnFocus = null", context);
 await get('approvalDialog').fire('close');
 assert.equal(document.activeElement.dataset.focusKey, 'async-test-task-view');
+
+const autoDoc = {
+  id: 'doc-new', title: '自动刷新资料', status: 'pending', confidentiality: 'L2', version: 1,
+  document_type: 'tutorial', processing_status: 'ready', analysis_status: 'not_required',
+  original_filename: 'auto.md', system_copy_matches_original: true, source_text: '自动刷新内容',
+  parsed: {}, analysis: {}, sources: [],
+};
+context.autoDoc = autoDoc;
+responses['/api/research/projects'] = {items: [{id: 'p', name: '课题', document_count: 1, memory_count: 0}]};
+responses['/api/research/projects/p/documents'] = {items: [autoDoc]};
+responses['/api/research/documents/doc-new'] = autoDoc;
+responses['/api/research/tasks'] = {items: [], async_items: [{id: 'auto-task', kind: 'upload', project_name: '课题', project_id: 'p', status: 'completed', request: {}, result: autoDoc}]};
+vm.runInContext("state.projectId = 'p'; state.view = 'library'; state.watchingTasks.set('auto-task', {origin: 'upload'})", context);
+await vm.runInContext('refreshTasks()', context);
+assert.equal(vm.runInContext('state.documents[0].id', context), 'doc-new');
+assert.equal(get('pendingNavCount').textContent, '1');

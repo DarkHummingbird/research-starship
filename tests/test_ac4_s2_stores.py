@@ -15,7 +15,7 @@ MODULES = (
     "app.channels.binding", "app.channels.links", "app.channels.conversation",
     "app.agent.proactive.store", "app.agent.memory.episodic", "app.confirm_store",
     "app.agent.schedules.models", "app.data_access.memory_facts",
-    "app.data_access.memory_migration", "app.turn_results", "app.secrets_vault",
+    "app.data_access.memory_migration", "app.data_access.attachments", "app.turn_results", "app.secrets_vault",
 )
 for module in MODULES:
     importlib.import_module(module)
@@ -35,6 +35,9 @@ def make_row(model, owner):
             continue
         if column.key == "confidentiality":
             values[column.key] = "L1"
+            continue
+        if column.key == "media_kind":
+            values[column.key] = "document"
             continue
         kind = column.type.python_type
         values[column.key] = (uuid.uuid4().hex if kind is str else

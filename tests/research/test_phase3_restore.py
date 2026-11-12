@@ -8,6 +8,12 @@ from tests.research.test_p3_backup import backup_document
 from tests.research.test_p2_analysis import paper
 
 
+def legacy_export(uid):
+    from app.research import backup
+
+    return backup.export_library(uid, confirmed=True)
+
+
 @pytest.fixture(autouse=True)
 def isolate_background_jobs(monkeypatch):
     from app.research import batches
@@ -17,8 +23,8 @@ def isolate_background_jobs(monkeypatch):
 
 
 def test_full_restore_preview_confirmation_and_search(client, backup_document, auth, tmp_path, monkeypatch):
-    _, headers, project_id, document = backup_document
-    export = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    uid, headers, project_id, document = backup_document
+    export = legacy_export(uid)
     backup = Path(export['path']).read_bytes()
     download = client.get(export['download_url'], headers=headers)
     assert download.status_code == 200 and download.content == backup
@@ -48,8 +54,8 @@ def test_full_restore_preview_confirmation_and_search(client, backup_document, a
 
 
 def test_restore_rejects_tampering_and_old_backup(client, backup_document, auth, tmp_path, monkeypatch):
-    _, headers, _, _ = backup_document
-    export = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    uid, headers, _, _ = backup_document
+    export = legacy_export(uid)
     raw = Path(export['path']).read_bytes()
     with zipfile.ZipFile(io.BytesIO(raw)) as source:
         entries = {item.filename: source.read(item) for item in source.infolist()}
@@ -69,8 +75,8 @@ def test_restore_rejects_tampering_and_old_backup(client, backup_document, auth,
 
 
 def test_restore_rejects_confidentiality_downgrade(client, backup_document, auth, tmp_path, monkeypatch):
-    _, headers, _, _ = backup_document
-    exported = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    uid, headers, _, _ = backup_document
+    exported = legacy_export(uid)
     with zipfile.ZipFile(exported['path']) as source:
         entries = {item.filename: source.read(item) for item in source.infolist()}
     payload = json.loads(entries['research.json'])
@@ -86,8 +92,8 @@ def test_restore_rejects_confidentiality_downgrade(client, backup_document, auth
 
 
 def test_restore_pdf_retains_source_highlight(client, paper, auth, tmp_path, monkeypatch):
-    _, headers, _, document = paper
-    exported = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    uid, headers, _, document = paper
+    exported = legacy_export(uid)
     backup = Path(exported['path']).read_bytes()
     monkeypatch.setenv('RESEARCH_DATA_DIR', str(tmp_path / 'pdf-restore'))
     headers = auth('pdf-restore-user')
@@ -100,8 +106,8 @@ def test_restore_pdf_retains_source_highlight(client, paper, auth, tmp_path, mon
 
 
 def test_restore_id_collision_does_not_touch_existing_data(client, backup_document, auth):
-    _, headers, project_id, _ = backup_document
-    exported = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    uid, headers, project_id, _ = backup_document
+    exported = legacy_export(uid)
     backup = Path(exported['path']).read_bytes()
     other = auth('another-empty-user')
     preview = client.post('/api/research/restore/preview', headers=other, files={'file': ('backup.zip', backup, 'application/zip')}).json()['data']
@@ -127,7 +133,7 @@ def test_restore_does_not_resume_tasks_or_external_approvals(client, backup_docu
         conn.add(store.ResearchBatch(id='bat-restore-sample', user_id=uid, project_id=project_id, status='processing', item_count=1, created_at=now, completed_at=''))
         conn.add(store.ResearchBatchItem(id='bti-restore-sample', batch_id='bat-restore-sample', user_id=uid, project_id=project_id, document_id=document['id'], status='processing', error='', created_at=now, started_at=now, completed_at=''))
         conn.add(store.ResearchAsyncTask(id='tsk-restore-external', user_id=uid, project_id=project_id, kind='chat', status='processing', request_json='{"provider":"external"}', result_json='{}', error='', created_at=now, started_at=now, completed_at=''))
-    exported = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    exported = legacy_export(uid)
     backup = Path(exported['path']).read_bytes()
     monkeypatch.setenv('RESEARCH_DATA_DIR', str(tmp_path / 'restore-paused'))
     headers = auth('restore-paused-user')
@@ -145,11 +151,11 @@ def test_restore_does_not_resume_tasks_or_external_approvals(client, backup_docu
 
 
 def test_restore_preserves_history_and_can_restore_an_old_version(client, backup_document, auth, tmp_path, monkeypatch):
-    _, headers, _, document = backup_document
+    uid, headers, _, document = backup_document
     changed = client.patch(f"/api/research/documents/{document['id']}", headers=headers,
                            json={'expected_version': 1, 'title': '新版本标题'})
     assert changed.status_code == 200, changed.text
-    exported = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    exported = legacy_export(uid)
     backup = Path(exported['path']).read_bytes()
     monkeypatch.setenv('RESEARCH_DATA_DIR', str(tmp_path / 'restore-history'))
     headers = auth('restore-history-user')
@@ -171,8 +177,8 @@ def test_restore_schedules_missing_index_for_offline_rebuild(client, backup_docu
     if real_embedding and not component_status()['embedding']['available']:
         pytest.skip('local embedding assets unavailable')
     real_embed = ingest.embed_texts
-    _, headers, _, document = backup_document
-    exported = client.post('/api/research/export', headers=headers, json={'confirmed': True}).json()['data']
+    uid, headers, _, document = backup_document
+    exported = legacy_export(uid)
     with zipfile.ZipFile(exported['path']) as source:
         entries = {item.filename: source.read(item) for item in source.infolist()}
     payload = json.loads(entries['research.json'])

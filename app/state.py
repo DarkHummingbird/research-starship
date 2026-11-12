@@ -32,6 +32,7 @@ class AgentState(TypedDict, total=False):
     thread_id: str
     action: Literal["update_profile", "draft", "confirm", "chat"]
     message: str
+    attachment_id: str
     intent_result: Optional[dict[str, Any]]
     intent_message: str
     intent_input_fields: list[str]

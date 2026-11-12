@@ -38,11 +38,12 @@ def backup_document(client, auth, tmp_path, monkeypatch):
 
 def test_confirmed_zip_contains_cards_originals_and_missing_manifest(client, backup_document):
     uid, headers, project_id, document = backup_document
-    denied = client.post("/api/research/export", json={"confirmed": False}, headers=headers)
-    assert denied.status_code == 409
-    response = client.post("/api/research/export", json={"confirmed": True}, headers=headers)
-    assert response.status_code == 201, response.text
-    result = response.json()["data"]
+    from app.research import backup
+    from app.research.service import ResearchError
+
+    with pytest.raises(ResearchError):
+        backup.export_library(uid, confirmed=False)
+    result = backup.export_library(uid, confirmed=True)
     target = Path(result["path"])
     assert target.is_file()
     with zipfile.ZipFile(target) as archive:
@@ -56,9 +57,7 @@ def test_confirmed_zip_contains_cards_originals_and_missing_manifest(client, bac
     with migration_session() as conn:
         row = conn.get(store.ResearchDocument, document["id"])
         Path(row.stored_path).unlink()
-    second = client.post("/api/research/export", json={"confirmed": True}, headers=headers)
-    assert second.status_code == 201
-    result = second.json()["data"]
+    result = backup.export_library(uid, confirmed=True)
     assert result["filename"] == "research-starship-backup-v2.zip"
     assert result["missing_originals"][0]["document_id"] == document["id"]
     with zipfile.ZipFile(result["path"]) as archive:

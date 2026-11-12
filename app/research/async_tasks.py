@@ -93,7 +93,7 @@ def create(uid, project_id, kind, request):
             versions[doc_id] = document.version
         request = {**request, '_versions': versions}
         task_id = 'tsk_' + uuid.uuid4().hex
-        if (kind in NETWORK_KINDS or (kind == 'chat' and request.get('provider') == 'external')) and not request.get('task_id'):
+        if (kind in NETWORK_KINDS or kind == 'chat') and not request.get('task_id'):
             request['task_id'] = task_id
         row = store.ResearchAsyncTask(id=task_id, user_id=uid, project_id=project_id, kind=kind,
             status='queued', request_json=json.dumps(request, ensure_ascii=False), result_json='{}', error='',

@@ -165,6 +165,8 @@ def restore_version(
         conn.execute(update(store.ResearchMemory).where(
             store.ResearchMemory.document_id == document_id
         ).values(active=False))
+        from app.research.notes import mark_source_invalid
+        mark_source_invalid(conn, document_id, reason="来源资料已恢复为历史内容，关联笔记需要重新核对")
         conn.flush()
         after = document_state(row)
         change = record_change(conn, row, operation=operation, before=before, after=after)
@@ -246,6 +248,8 @@ def delete_document(user_id: str, document_id: str, *, expected_version: int, co
         conn.execute(update(store.ResearchMemory).where(
             store.ResearchMemory.document_id == document_id
         ).values(active=False))
+        from app.research.notes import mark_source_invalid
+        mark_source_invalid(conn, document_id, reason="来源资料已移入回收站，关联笔记已退出有效检索")
         conn.flush()
         after = document_state(row)
         change = record_change(conn, row, operation="delete", before=before, after=after)

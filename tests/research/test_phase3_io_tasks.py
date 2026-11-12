@@ -59,10 +59,11 @@ def test_external_task_approval_and_no_automatic_retry(client, auth, tmp_path, m
 
 
 def test_restore_tasks_require_confirmation_and_empty_account(client, backup_document, auth, tmp_path, monkeypatch):
-    _, headers, _, document = backup_document
-    result = client.post('/api/research/backup-tasks/full', headers=headers, json={'confirmed':True})
-    assert result.status_code == 202
-    exported = wait(client, headers, result.json()['data']['id'])
+    uid, headers, _, document = backup_document
+    from app.research import async_tasks
+
+    result = async_tasks.create(uid, '', 'backup_full', {})
+    exported = wait(client, headers, result['id'])
     assert exported['status'] == 'completed', exported
     raw = Path(exported['result']['path']).read_bytes()
     monkeypatch.setenv('RESEARCH_DATA_DIR', str(tmp_path / 'isolated-restore'))

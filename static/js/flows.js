@@ -25,6 +25,7 @@ import {
   memoryCard,
 } from "./cards.js?v=__APP_VERSION__";
 import { openSecretSandbox } from "./secret.js?v=__APP_VERSION__";
+import { hasAttachment, prepareAttachment, resetAttachments } from "./attachments.js?v=__APP_VERSION__";
 import { confirmCard, draftFromResponse } from "./confirm.js?v=__APP_VERSION__";
 import { focusComposer } from "./composer.js?v=__APP_VERSION__";
 import { getProfile, setProfile, openDrawer, refreshSecrets, loadProfile } from "./drawer.js?v=__APP_VERSION__";
@@ -217,19 +218,28 @@ const timeOf = (value) => {
 export async function sendComposer({ text }) {
   const value = String(text || "").trim();
   if (!value) return;
+  let attachmentId = "";
+  try {
+    if (hasAttachment()) attachmentId = await prepareAttachment();
+  } catch (err) {
+    showError(err, "chat", () => sendComposer({ text }));
+    return false;
+  }
   echoUser(value);
-  await sendText(value);
+  const sent = await sendText(value, { attachmentId });
+  if (sent) resetAttachments();
+  return sent;
 }
 
-async function sendText(text, { replyTo = null } = {}) {
+async function sendText(text, { replyTo = null, attachmentId = "" } = {}) {
   const owner = currentUserId();
   const revision = displayRevision;
   let res;
   try {
-    res = await withTyping(() => api.chat(text, { replyTo }), { slowHint: SLOW_HINT });
+    res = await withTyping(() => api.chat(text, { replyTo, attachmentId }), { slowHint: SLOW_HINT });
   } catch (err) {
     if (owner !== currentUserId()) return false;
-    showError(err, "chat", () => sendText(text, { replyTo }));
+    showError(err, "chat", () => sendText(text, { replyTo, attachmentId }));
     return false;
   }
   if (owner !== currentUserId()) return false;
@@ -659,6 +669,7 @@ export function resetThread() {
   displayRevision++;
   nodes.clear();
   clearLog();
+  resetAttachments();
 }
 
 export function showHero() {

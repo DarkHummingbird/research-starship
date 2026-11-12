@@ -21,7 +21,7 @@ from app.agent.memory.summary import maybe_summarize_turn
 from app.agent.subgraphs.profile import load_profile
 from app.state import AgentState
 from app.agent.crisis_rules import has_crisis_signal
-from app.agent.router import current_turn_inputs, intent_result_for
+from app.agent.router import IntentResult, current_turn_inputs, intent_result_for
 from app.tools.prompt_data import UNTRUSTED_DATA_RULE
 
 PERSONA = load_prompt("chat.persona", "v2")
@@ -161,12 +161,16 @@ def node_chat(state: AgentState) -> dict[str, Any]:
 
     t_start = _time.monotonic()
     system = PERSONA + UNTRUSTED_DATA_RULE
-    result = intent_result_for(state, msg)
-    crisis = (
-        bool(state.get("crisis_detected"))
-        or result.rule_id == "crisis"
-        or (bool(msg) and _llm_risk(msg))
-    )
+    if state.get("attachment_id"):
+        result = IntentResult("chat", 1.0, ["chat"], "attachment", False, "route")
+        crisis = bool(state.get("crisis_detected")) or has_crisis_signal(msg)
+    else:
+        result = intent_result_for(state, msg)
+        crisis = (
+            bool(state.get("crisis_detected"))
+            or result.rule_id == "crisis"
+            or (bool(msg) and _llm_risk(msg))
+        )
     if not crisis:
         from app.agent.ask_cards import intent_card
 
@@ -200,7 +204,7 @@ def node_chat(state: AgentState) -> dict[str, Any]:
             # its revision bump. Other invalidations still discard history.
             conversation["memory_rev"] = int(db.get_profile(uid).get("memory_rev", 0))
         state = {**state, "conversation_context": conversation}
-    mem = assemble_context(state, query=msg)
+    mem = "" if state.get("attachment_id") else assemble_context(state, query=msg)
     if mem:
         system += "\n\n" + mem
     ask = None
@@ -229,17 +233,24 @@ def node_chat(state: AgentState) -> dict[str, Any]:
 
                 logging.getLogger("crisis").warning("crisis_reply_fixed_block elapsed=%.1fs", _time.monotonic() - t_start)
         else:
-            from app.agent.crawl_tools import source_context, CRAWL_TOOLS
-            if result.rule_id in {"model_tool:" + name for name in CRAWL_TOOLS}:
-                system += source_context(msg, state)
-            raw = chat_text(
-                system,
-                f"{context}\n{msg}" if context else msg,
-                task="chat",
-                # No key configured: show the offline placeholder (it says how to
-                # configure a model) instead of pretending the model was slow.
-                fallback=FALLBACK_REPLY if has_llm() else "",
-            )
+            if state.get("attachment_id"):
+                from app.agent.attachments import generate_attachment_reply
+
+                raw = generate_attachment_reply(
+                    uid, state["attachment_id"], thread_id=tid, system=system, message=msg,
+                )
+            else:
+                from app.agent.crawl_tools import source_context, CRAWL_TOOLS
+                if result.rule_id in {"model_tool:" + name for name in CRAWL_TOOLS}:
+                    system += source_context(msg, state)
+                raw = chat_text(
+                    system,
+                    f"{context}\n{msg}" if context else msg,
+                    task="chat",
+                    # No key configured: show the offline placeholder (it says how to
+                    # configure a model) instead of pretending the model was slow.
+                    fallback=FALLBACK_REPLY if has_llm() else "",
+                )
         # Scan before parsing can discard or rewrite leaked prompt text.
         profile = load_profile(state)
         raw = guard_text(raw, user_id=uid, profile=profile, inputs=(msg,), where="chat_raw")
@@ -255,22 +266,23 @@ def node_chat(state: AgentState) -> dict[str, Any]:
             reply = _sanitize_crisis_reply(reply)
         elif not reply and not ask:
             reply = "我在呢。你愿意再多说一点吗？"
-    write_event(
-        uid,
-        "chat",
-        ((reply or "") + (f" [问：{ask.get('question') or ask.get('label')}]" if ask else ""))[:240],
-        tags=["chat"] + ([f"ask_{ask['type']}"] if ask else []),
-        payload={"user_chars": len(msg), "ask_type": ask["type"] if ask else None},
-        thread_id=tid,
-    )
-    if msg:
-        maybe_summarize_turn(
+    if not state.get("attachment_id"):
+        write_event(
             uid,
-            kind="chat",
-            user_text=msg,
-            assistant_text=reply or "",
+            "chat",
+            ((reply or "") + (f" [问：{ask.get('question') or ask.get('label')}]" if ask else ""))[:240],
+            tags=["chat"] + ([f"ask_{ask['type']}"] if ask else []),
+            payload={"user_chars": len(msg), "ask_type": ask["type"] if ask else None},
             thread_id=tid,
         )
+        if msg:
+            maybe_summarize_turn(
+                uid,
+                kind="chat",
+                user_text=msg,
+                assistant_text=reply or "",
+                thread_id=tid,
+            )
     return {
         "conversation_context": record_turn(state, msg, reply or "", compress=not crisis),
         "profile": load_profile(state),

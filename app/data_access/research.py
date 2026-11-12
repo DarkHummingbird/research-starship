@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import Boolean, CheckConstraint, Index, Integer, String, Text, UniqueConstraint, create_engine, text
+from sqlalchemy import Boolean, CheckConstraint, Index, Integer, String, Text, UniqueConstraint, create_engine, select, text, update
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base as ResearchBase
@@ -294,6 +295,51 @@ Index("idx_research_memories_project", ResearchMemory.user_id, ResearchMemory.pr
 Index("idx_research_messages_conversation", ResearchMessage.conversation_id, ResearchMessage.id)
 Index("idx_research_outbound_task", ResearchOutboundApproval.user_id, ResearchOutboundApproval.task_id)
 Index("idx_research_security_user", ResearchSecurityEvent.user_id, ResearchSecurityEvent.project_id, ResearchSecurityEvent.id)
+
+def note_source_document(conn, user_id: str, document_id: str):
+    return conn.execute(select(ResearchDocument).where(
+        ResearchDocument.id == document_id,
+        ResearchDocument.user_id == user_id,
+    )).scalar_one_or_none()
+
+
+def note_source_document_by_id(conn, document_id: str):
+    return conn.get(ResearchDocument, document_id)
+
+
+def note_source_chunks(conn, document_id: str, version: int):
+    return conn.execute(select(ResearchChunk).where(
+        ResearchChunk.document_id == document_id,
+        ResearchChunk.document_version == version,
+    ).order_by(ResearchChunk.ordinal)).scalars().all()
+
+
+def note_source_chunk(conn, chunk_id: str, document_id: str, version: int):
+    return conn.execute(select(ResearchChunk).where(
+        ResearchChunk.id == chunk_id,
+        ResearchChunk.document_id == document_id,
+        ResearchChunk.document_version == version,
+    )).scalar_one_or_none()
+
+
+def notes_dependent_on_source(conn, source):
+    notes = conn.execute(select(ResearchDocument).where(
+        ResearchDocument.user_id == source.user_id,
+        ResearchDocument.project_id == source.project_id,
+        ResearchDocument.document_type == "research_note",
+        ResearchDocument.status != "deleted",
+    )).scalars().all()
+    return [note for note in notes if any(
+        ref.get("document_id") == source.id
+        for ref in (json.loads(note.parsed_json or "{}").get("note_provenance") or [])
+    )]
+
+
+def deactivate_note_memories(conn, note_id: str) -> None:
+    conn.execute(update(ResearchMemory).where(
+        ResearchMemory.document_id == note_id
+    ).values(active=False))
+
 
 _engines: dict[Path, object] = {}
 _factories: dict[Path, object] = {}

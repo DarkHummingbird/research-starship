@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import uuid
 from pathlib import Path
@@ -199,6 +200,8 @@ def update_document(
                 content=chunk["content"], confidentiality=new_level,
                 locator_json=chunk.get("locator_json") or "{}",
             ))
+        from app.research.notes import mark_source_invalid
+        mark_source_invalid(conn, document_id, reason="来源资料已更新，关联笔记需要重新核对")
         conn.flush()
         after = document_state(row)
         from app.research.lifecycle import record_change
@@ -237,7 +240,12 @@ def review_document(user_id: str, document_id: str, *, expected_version: int, ap
             row.status = "rejected"
             row.approved_version = None
             row.updated_at = now
+            from app.research.notes import mark_source_invalid
+            mark_source_invalid(conn, document_id, reason="来源资料已取消确认，关联笔记需要重新核对")
         else:
+            if row.document_type == "research_note":
+                from app.research.notes import refresh_for_review
+                refresh_for_review(conn, user_id, row)
             parsed = store.json_value(row.parsed_json, {})
             chunks = conn.execute(select(store.ResearchChunk).where(
                 store.ResearchChunk.document_id == document_id,
@@ -252,6 +260,10 @@ def review_document(user_id: str, document_id: str, *, expected_version: int, ap
 
             check_document_conflicts(conn, user_id, row)
             by_chunk = {chunk.id: chunk for chunk in chunks}
+            conn.execute(delete(store.ResearchMemory).where(
+                store.ResearchMemory.document_id == document_id,
+                store.ResearchMemory.document_version == expected_version,
+            ))
             for entry in parsed["entries"]:
                 evidence = entry["evidence"]
                 chunk = by_chunk[evidence["chunk_id"]]
@@ -314,12 +326,48 @@ def list_memories(user_id: str, project_id: str) -> list[dict[str, Any]]:
         return result
 
 
-def _terms(text: str) -> set[str]:
-    normalized = re.sub(r"\s+", "", text.lower())
+def _term_tokens(text: str) -> list[str]:
+    normalized = text.lower()
     han = "".join(re.findall(r"[\u4e00-\u9fff]", normalized))
-    terms = {han[index:index + 2] for index in range(max(0, len(han) - 1))}
-    terms.update(re.findall(r"[a-z0-9][a-z0-9_.-]+", normalized))
-    return {term for term in terms if len(term) > 1}
+    tokens = [han[index:index + 2] for index in range(max(0, len(han) - 1))]
+    tokens.extend(re.findall(r"[a-z0-9][a-z0-9_.-]+", normalized))
+    return [term for term in tokens if len(term) > 1]
+
+
+def _terms(text: str) -> set[str]:
+    return set(_term_tokens(text))
+
+
+def _term_counts(text: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for term in _term_tokens(text):
+        counts[term] = counts.get(term, 0) + 1
+    return counts
+
+
+def _bm25_context(documents_terms: list[dict[str, int]]) -> tuple[dict[str, int], float]:
+    document_frequency: dict[str, int] = {}
+    for terms in documents_terms:
+        for term in terms:
+            document_frequency[term] = document_frequency.get(term, 0) + 1
+    average_length = sum((sum(terms.values()) for terms in documents_terms), 0) / max(1, len(documents_terms))
+    return document_frequency, average_length
+
+
+def _bm25_score(query_terms: set[str], content_terms: dict[str, int], document_frequency: dict[str, int], average_length: float, document_count: int) -> float:
+    if not query_terms or not content_terms or not document_count:
+        return 0.0
+    k1, b = 1.5, 0.75
+    document_length = sum(content_terms.values())
+    score = 0.0
+    for term in query_terms & content_terms.keys():
+        frequency = document_frequency.get(term, 0)
+        if not frequency:
+            continue
+        inverse_document_frequency = math.log1p((document_count - frequency + 0.5) / (frequency + 0.5))
+        term_frequency = content_terms[term]
+        score += inverse_document_frequency * (term_frequency * (k1 + 1)) / (term_frequency + k1 * (1 - b + b * document_length / average_length))
+    return score
 
 
 def search_confirmed(
@@ -329,8 +377,11 @@ def search_confirmed(
     *,
     cross_project_ids: list[str] | None = None,
     limit: int = 3,
+    query_confidentiality: str = "L3",
 ) -> list[dict[str, Any]]:
+    from app.gateway import providers
     from app.research.local_components import LocalComponentError, component_status, embed_texts
+    from app.research.online import embedding_spec, embed_texts as embed_online
 
     project_ids = [project_id] + [item for item in (cross_project_ids or []) if item != project_id]
     with migration_session() as conn:
@@ -358,24 +409,46 @@ def search_confirmed(
     query_terms = _terms(query)
     if not query_terms:
         return []
-    vector_by_chunk = {row.chunk_id: store.json_value(row.vector_json, []) for row in embeddings}
+    online_spec = embedding_spec()
+    online_allowed = online_spec.has_key() and query_confidentiality == "L1" and all(
+        document.confidentiality == "L1" for _, _, document in rows
+    )
+    active_model = online_spec.model if online_allowed else component_status()["embedding"].get("model", "BAAI/bge-m3:onnx")
+    vector_by_chunk = {
+        row.chunk_id: store.json_value(row.vector_json, []) for row in embeddings if row.model == active_model
+    }
     query_vector: list[float] = []
     retrieval = "local-lexical-v1"
-    if vector_by_chunk and component_status()["embedding"]["available"]:
+    if vector_by_chunk and online_allowed:
+        try:
+            query_vector = embed_online(online_spec, [query])["vectors"][0]
+            retrieval = f"{online_spec.model}+lexical"
+        except providers.ProviderError as exc:
+            raise ResearchError(
+                503, "external_call_failed_no_retry",
+                "在线检索向量服务未完成，本次没有自动重试；请稍后手动重试",
+            ) from exc
+    elif vector_by_chunk and component_status()["embedding"]["available"]:
         try:
             query_vector = embed_texts([query])["vectors"][0]
             retrieval = "bge-m3+lexical"
         except LocalComponentError:
             query_vector = []
     quantity_question = bool(re.search(r"多少|几个|数量|上限", query))
+    documents_terms = [_term_counts(chunk.content) for _, chunk, _ in rows]
+    document_frequency, average_length = _bm25_context(documents_terms)
+    bm25_by_chunk: dict[str, float] = {}
+    for (_, chunk, _), content_counts in zip(rows, documents_terms, strict=True):
+        bm25_by_chunk[chunk.id] = _bm25_score(query_terms, content_counts, document_frequency, average_length, len(rows))
+    max_bm25 = max(bm25_by_chunk.values(), default=0.0)
     ranked: list[dict[str, Any]] = []
-    for memory, chunk, document in rows:
-        content_terms = _terms(chunk.content)
+    for (memory, chunk, document), content_counts in zip(rows, documents_terms, strict=True):
+        content_terms = set(content_counts)
         matched = query_terms & content_terms
         coverage = len(matched) / len(query_terms)
         vector = vector_by_chunk.get(chunk.id) if query_vector else []
         semantic = sum(q * float(v) for q, v in zip(query_vector, vector, strict=False)) if vector else 0.0
-        if not vector and coverage < 0.16:
+        if not vector and bm25_by_chunk[chunk.id] <= 0:
             continue
         if vector and coverage < 0.16 and semantic < 0.25:
             continue
@@ -385,8 +458,8 @@ def search_confirmed(
             r"(?:\d+|多个|无限|无上限)[^。\n]{0,20}课题|课题[^。\n]{0,20}(?:\d+|多个|无限|无上限|上限)", chunk.content
         ):
             continue
-        lexical_score = coverage + len(matched) / max(1, len(content_terms)) ** 0.5 * 0.05
-        score = semantic * 0.8 + coverage * 0.2 if vector else lexical_score
+        lexical_score = bm25_by_chunk[chunk.id]
+        score = semantic * 0.95 + (lexical_score / max_bm25 if max_bm25 else 0.0) * 0.05 if vector else lexical_score
         locator = store.json_value(chunk.locator_json, {})
         ranked.append({
             "memory_id": memory.id, "project_id": memory.project_id, "document_id": memory.document_id,
@@ -517,6 +590,42 @@ def prepare_documents_outbound(
     )
 
 
+def _rerank_matches(
+    user_id: str,
+    project_id: str,
+    message: str,
+    matches: list[dict[str, Any]],
+    query_confidentiality: str,
+    task_id: str,
+    approval_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if not matches or gateway.highest_level([query_confidentiality] + [item["confidentiality"] for item in matches]) == "L3":
+        return matches, None
+    from app.research.online import rerank, rerank_spec
+
+    spec = rerank_spec()
+    if not spec.has_key():
+        return matches, None
+    fragments = [{
+        "document_id": None, "version": 0, "chunk_id": "query", "chapter": "用户问题",
+        "snippet": message, "classification": query_confidentiality,
+        "sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+    }, *[_outbound_fragment(item) for item in matches]]
+    approval = gateway.prepare(
+        user_id, project_id, task_id=task_id or _id("task_"), provider=spec.vendor, model_id=spec.id,
+        destination=spec.base_url, purpose="科研检索候选重排", operation="search", fragments=fragments,
+    )
+    if approval["status"] != "approved":
+        return matches, {"status": "awaiting_outbound_approval", "approval": approval}
+    if approval_id and approval["id"] != approval_id:
+        raise ResearchError(409, "approval_scope_changed", "重排内容已变化，请重新审批")
+    order = gateway.execute_once(
+        user_id, approval["id"],
+        lambda _approval: rerank(spec, message, [item["content"] for item in matches]),
+    )
+    return [matches[index] for index in order], None
+
+
 def chat(
     user_id: str,
     project_id: str,
@@ -555,7 +664,19 @@ def chat(
             ))
         if not approval_id:
             _save_message(conn, conversation_id, user_id, project_id, "user", message, query_confidentiality, [], "user")
-    matches = search_confirmed(user_id, project_id, message, cross_project_ids=cross_project_ids)
+    matches = search_confirmed(
+        user_id, project_id, message, cross_project_ids=cross_project_ids,
+        query_confidentiality=query_confidentiality, limit=100,
+    )
+    matches, rerank_pending = _rerank_matches(
+        user_id, project_id, message, matches, query_confidentiality, task_id, approval_id,
+    )
+    if rerank_pending:
+        return {**rerank_pending, "conversation_id": conversation_id,
+                "task_id": rerank_pending["approval"]["task_id"], "sources": _sources(matches)}
+    if approval_id and gateway.get(user_id, approval_id)["purpose"] == "科研检索候选重排":
+        approval_id = ""
+    matches = matches[:3]
     check_cancelled()
     sources = _sources(matches)
     classification = gateway.highest_level([query_confidentiality] + [item["confidentiality"] for item in matches])

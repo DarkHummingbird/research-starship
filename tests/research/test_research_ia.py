@@ -42,8 +42,12 @@ def test_research_page_has_four_task_workspaces():
     assert parser.nav_targets == ["library", "review", "chat", "data"]
     assert len(parser.ids) == len(set(parser.ids))
     assert "latex" not in parser.generation_options
-    assert "恢复完整备份" in html
-    assert "只支持恢复到没有科研数据的账号" in html
+    assert "恢复完整备份" not in html
+    assert "restorePreviewForm" not in html
+    assert "不提供整库恢复" in html
+    assert "创建完整备份" not in html
+    assert "exportLibrary" not in html
+    assert "使用同一产品的助手功能" in html
     assert "诊断与原始输出" in html
     for internal_term in ("P4", "Personal Agent", "本地 RAG"):
         assert internal_term not in html
@@ -57,3 +61,12 @@ def test_research_view_interactions():
         capture_output=True,
         text=True,
     )
+
+
+def test_full_backup_creation_is_removed(client, auth, tmp_path, monkeypatch):
+    monkeypatch.setenv("RESEARCH_DATA_DIR", str(tmp_path / "research"))
+    headers = auth("removed-full-backup")
+    for path in ("/api/research/backup-tasks/full", "/api/research/export"):
+        response = client.post(path, json={"confirmed": True}, headers=headers)
+        assert response.status_code == 410
+        assert response.json()["detail"]["code"] == "full_backup_removed"

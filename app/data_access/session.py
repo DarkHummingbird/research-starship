@@ -27,7 +27,7 @@ _PRIVATE_TABLES = {
     "confirm_tokens", "channel_conversations",
     "channel_bindings", "channel_link_tokens", "user_secrets",
     "user_schedules", "user_schedule_runs", "user_schedule_proposals", "user_activity",
-    "proactive_items", "proactive_runs", "memory_facts", "memory_migration_receipts", "turn_results",
+    "proactive_items", "proactive_runs", "memory_facts", "memory_migration_receipts", "turn_results", "chat_attachments",
     "research_projects", "research_documents", "research_chunks", "research_memories",
     "research_conversations", "research_messages", "research_outbound_approvals", "research_security_events",
     "research_embeddings", "research_generations", "research_conflicts", "research_document_versions",

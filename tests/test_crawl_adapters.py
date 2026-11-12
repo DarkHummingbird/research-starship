@@ -200,3 +200,48 @@ def test_crawl4ai_browser_requests_use_guard(crawl, monkeypatch):
     assert out["status"] == "ok" and out["items"][0]["markdown"] == "Synthetic JS result"
     assert [x[0] for x in observed] == ["fulfilled", "aborted", "websocket_block"]
     assert not any("127.0.0.1" in c[0] for c in calls)
+
+
+
+def test_deepseek_search_post_recency_and_result_mapping(crawl, monkeypatch):
+    router, handlers, calls, _ = crawl
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-deepseek-token")
+    handlers["https://api.deepseek.com/v1/tools/search"] = {"results": [{
+        "url": "https://source.example/search", "title": "Synthetic result",
+        "snippet": "Synthetic snippet", "date": "2026-01-01T00:00:00Z",
+    }]}
+    out = router.route("search.deepseek", query="synthetic", recency_days=7)
+    assert out["status"] == "ok"
+    assert out["items"][0]["adapter"] == "search.deepseek"
+    assert out["items"][0]["snippet"] == "Synthetic snippet"
+    request = calls[-1]
+    assert request[2]["method"] == "POST"
+    assert request[2]["headers"]["Authorization"] == "Bearer synthetic-deepseek-token"
+    body = json.loads(request[2]["body"])
+    assert body["query"].startswith("synthetic after:")
+    assert body["count"] == 20 and body["need_content"] is False
+
+
+def test_deepseek_search_requires_key_and_bounded_query(crawl, monkeypatch):
+    router, _, calls, _ = crawl
+    assert router.route("search.deepseek", query="synthetic")["status"] == "not_configured"
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-deepseek-token")
+    out = router.route("search.deepseek", query="x" * 129)
+    assert out["status"] == "error" and not out["items"]
+    assert not calls
+
+
+def test_deepseek_web_fetch_post_and_secret_redaction(crawl, monkeypatch):
+    router, handlers, calls, _ = crawl
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-deepseek-token")
+    handlers["https://source.example/article"] = http.Response(200, b"Synthetic page", {})
+    handlers["https://api.deepseek.com/v1/tools/fetch"] = {"title": "Synthetic", "content": "Reader text"}
+    out = router.route("web.deepseek", url="https://source.example/article")
+    assert out["status"] == "ok"
+    assert out["items"][0]["markdown"] == "Reader text"
+    request = calls[-1]
+    assert request[2]["method"] == "POST"
+    assert json.loads(request[2]["body"]) == {"url": "https://source.example/article"}
+    assert http.redact("synthetic-deepseek-token") == "[redacted]"
+    original = next(call for call in calls if call[0] == "https://source.example/article")
+    assert not original[2]["headers"]

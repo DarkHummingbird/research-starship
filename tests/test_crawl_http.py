@@ -163,3 +163,35 @@ def test_jina_extracts_final_allowed_redirect_url(crawl):
         "https://source.example/robots.txt", "https://source.example/go", "https://source.example/article",
         "https://r.jina.ai/robots.txt", "https://r.jina.ai/https://source.example/article",
     ]
+
+
+
+def test_dns_allowlist_is_explicit_and_does_not_allow_ip_literals(crawl, monkeypatch):
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", Mock(return_value=[
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.19.50.207", 443)),
+    ]))
+    with pytest.raises(CrawlError, match="non-public DNS"):
+        http.resolve_public("https://example.com")
+    monkeypatch.setenv("CRAWL_DNS_ALLOWLIST", "198.19.0.0/16")
+    assert http.resolve_public("https://example.com") == "198.19.50.207"
+    with pytest.raises(CrawlError, match="non-public URL"):
+        http.public_url("https://198.19.50.207")
+    monkeypatch.setenv("CRAWL_DNS_ALLOWLIST", "not-a-network")
+    with pytest.raises(CrawlError, match="Invalid CRAWL_DNS_ALLOWLIST"):
+        http.resolve_public("https://example.com")
+
+
+def test_deepseek_authorization_not_forwarded_across_redirect_origin(crawl, monkeypatch):
+    router, handlers, calls, _ = crawl
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "synthetic-deepseek-token")
+    start = "https://api.deepseek.com/v1/tools/search"
+    destination = "https://other.example/search"
+    handlers[start] = http.Response(302, b"", {"location": destination})
+    handlers[destination] = {"results": [{"url": "https://source.example/result", "title": "Synthetic"}]}
+    out = router.route("search.deepseek", query="synthetic")
+    assert out["status"] == "ok" and out["items"]
+    initial = next(call for call in calls if call[0] == start)
+    redirected = next(call for call in calls if call[0] == destination)
+    assert initial[2]["headers"]["Authorization"] == "Bearer synthetic-deepseek-token"
+    assert redirected[2]["headers"] == {}

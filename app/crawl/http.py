@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import ssl
+import truststore
 from dataclasses import dataclass
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit, unquote, unquote_to_bytes
 
@@ -17,7 +18,7 @@ from .errors import CrawlError, NotConfigured, PolicyDenied
 # Operators may append a contact URL, e.g. "PersonalAgentCrawler/1.0 (+https://example.com/bot)".
 USER_AGENT = (os.getenv("CRAWL_USER_AGENT") or "").strip() or "PersonalAgentCrawler/1.0"
 MAX_BYTES = 2 * 1024 * 1024
-SECRET_ENV = ("CRAWL_PROXY_URL", "JINA_API_KEY", "X_BEARER_TOKEN")
+SECRET_ENV = ("CRAWL_PROXY_URL", "DEEPSEEK_API_KEY", "JINA_API_KEY", "X_BEARER_TOKEN")
 
 
 def redact(value):
@@ -62,13 +63,29 @@ def public_url(url):
         raise CrawlError("SSRF: non-public URL rejected") from None
 
 
+def _dns_address_allowed(ip):
+    if ip.is_global and not ip.is_multicast:
+        return True
+    for value in os.getenv("CRAWL_DNS_ALLOWLIST", "").split(","):
+        value = value.strip()
+        if not value:
+            continue
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            raise CrawlError("Invalid CRAWL_DNS_ALLOWLIST") from None
+        if ip in network:
+            return True
+    return False
+
+
 def resolve_public(url):
     p = public_url(url)
     try:
         addresses = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80),
                                        type=socket.SOCK_STREAM)
         ips = [ipaddress.ip_address(row[4][0]) for row in addresses]
-        if not ips or any(not ip.is_global or ip.is_multicast for ip in ips):
+        if not ips or any(not _dns_address_allowed(ip) for ip in ips):
             raise CrawlError("SSRF: non-public DNS address rejected")
         return str(ips[0])
     except (OSError, ValueError):
@@ -182,7 +199,8 @@ def send(url, ip, *, proxy=None, headers=None, method="GET", body=None):
         if proxy_parts.username:
             auth = f"{unquote(proxy_parts.username)}:{unquote(proxy_parts.password or '')}"
             tunnel_headers["Proxy-Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
-    connection = (_PinnedHTTPS(host, connect_port, p.hostname, timeout=15)
+    connection = (_PinnedHTTPS(host, connect_port, p.hostname, timeout=15,
+                               context=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
                   if p.scheme == "https" else http.client.HTTPConnection(host, connect_port, timeout=15))
     if proxy:
         connection.set_tunnel(ip, port, headers=tunnel_headers)
@@ -210,7 +228,7 @@ class Fetcher:
         key = "robots:" + root
         saved = self.router.store.get(self.adapter, key, self.router.clock())
         if saved is None:
-            response = self.get(root, check_robots=False)
+            response = self.get(root, check_robots=False, method="GET", body=None, headers={})
             if response.status_code in {404, 410}:
                 text = "User-agent: *\nAllow: /"
             elif response.status_code == 200:

@@ -420,15 +420,47 @@ def create_study_note(
     content: str,
     document_type: str,
     confidentiality: str,
+    note_type: str = "user_record",
+    source_refs: list[dict[str, Any]] | None = None,
+    model_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from app.research.notes import NOTE_TYPES, note_confidentiality, validate_sources
     from app.research.service import ResearchError, import_document
 
-    if document_type not in ("baseline", "failure_experiment", "style_sample", "user_result"):
+    if document_type not in ("research_note", "baseline", "failure_experiment", "style_sample", "user_result"):
         raise ResearchError(400, "invalid_study_note_type", "不支持的科研记录类型")
     if not title.strip() or not content.strip():
         raise ResearchError(400, "empty_study_note", "标题和内容不能为空")
+    source_refs = list(source_refs or [])
+    if note_type not in NOTE_TYPES:
+        raise ResearchError(400, "invalid_note_type", "不支持的课题笔记类型")
+    if document_type == "research_note" and note_type in ("source_fact", "ai_summary") and not source_refs:
+        raise ResearchError(422, "note_source_required", "来源事实和 AI 归纳必须关联真实资料与逐字引文")
+    if source_refs:
+        with migration_session() as conn:
+            source_refs = validate_sources(conn, user_id, project_id, source_refs)
+        confidentiality = note_confidentiality(confidentiality, source_refs)
     source = f"# {title.strip()}\n\n{content.strip()}"
-    return import_document(
+    result = import_document(
         user_id, project_id, filename=f"{uuid.uuid4().hex}-{document_type}.md",
         content=source.encode("utf-8"), confidentiality=confidentiality, document_type=document_type,
     )
+    if document_type == "research_note":
+        parsed = dict(result.get("parsed") or {})
+        parsed.update({
+            "note_type": note_type,
+            "note_provenance": source_refs,
+            "note_validity": "valid",
+            "model_info": {
+                "model": str((model_info or {}).get("model") or ""),
+                "task_id": str((model_info or {}).get("task_id") or ""),
+            },
+        })
+        with memory_session() as conn:
+            row = conn.execute(select(store.ResearchDocument).where(
+                store.ResearchDocument.id == result["id"], store.ResearchDocument.user_id == user_id
+            )).scalar_one()
+            row.parsed_json = json.dumps(parsed, ensure_ascii=False)
+            conn.flush()
+        result["parsed"] = parsed
+    return result

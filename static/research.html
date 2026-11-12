@@ -13,7 +13,8 @@
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">研</span><h1>科研星舰</h1></div>
     <label class="topbar-project" for="projectSwitcher"><span>当前课题</span><select id="projectSwitcher" aria-label="切换当前课题" disabled></select></label>
-    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><p>资料、问答、备份和恢复任务可在文件接收完成后刷新查看。处理中的外部请求与恢复不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div></div></details>
+    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><p>资料、问答和备份任务可在文件接收完成后刷新查看。处理中的外部请求不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div></div></details>
+    <a class="quiet-button" href="/" aria-label="使用同一产品的助手功能">助手</a>
     <button id="dataManagementShortcut" class="quiet-button" type="button">数据管理</button>
   </header>
 
@@ -61,6 +62,7 @@
         </div>
       </header>
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <div id="indexNotice" class="notice" hidden><span id="indexNoticeText"></span><button id="openIndexManagement" type="button">管理索引</button></div>
       <div id="receipt" class="receipt" hidden><span id="receiptText" role="status" aria-live="polite" aria-atomic="true"></span><button id="dismissReceipt" class="quiet-button" type="button" aria-label="关闭操作回执">关闭</button></div>
 
       <div id="libraryView" data-view="library">
@@ -76,12 +78,13 @@
         </section>
 
         <section class="panel documents-panel" aria-labelledby="documentsTitle">
-          <div class="panel-heading"><div><h3 id="documentsTitle">当前课题资料</h3><p>选择一份资料，查看内容、来源和确认状态。</p></div><span id="memoryCount" class="tag">0 条正式记忆</span></div>
+          <div class="panel-heading"><div><h3 id="documentsTitle">当前课题资料</h3><p>选择一份资料，查看内容、来源和确认状态。</p></div><span id="memoryCount" class="tag">0 条课题笔记</span></div>
           <div class="document-layout">
             <div id="documentList" class="document-list"><p class="empty">暂无资料。上传后只会进入待确认状态。</p></div>
             <div id="libraryPreviewMount" class="preview-mount">
               <article id="documentPreview" class="document-preview" hidden>
                 <div class="preview-heading"><div><h4 id="documentTitle" tabindex="-1"></h4><p id="documentInfo"></p></div><span id="documentStatus" class="status-badge"></span></div>
+                <div id="noteTrust" class="note-trust" hidden></div>
                 <div id="paperWorkspace" class="paper-workspace"><div id="paperSourcePane" class="paper-source" hidden><p id="highlightStatus" role="status">选择字段查看对应原文。</p><img id="highlightImage" alt="原文高亮页面" hidden><iframe id="pdfPreview" class="pdf-preview" title="原始 PDF 预览" hidden></iframe><pre id="paperText" class="preview-content" hidden></pre></div><div class="paper-details">
                 <div class="tabs" role="tablist" aria-label="资料内容">
                   <button class="tab" id="tab-analysis" data-tab="analysis" role="tab" aria-controls="previewPanel" tabindex="-1" aria-selected="false" type="button">核心内容</button>
@@ -124,8 +127,8 @@
             <label for="question">你的问题</label>
             <textarea id="question" rows="3" required placeholder="例如：这篇论文的核心方法是什么？请给出原文依据。"></textarea>
             <div class="chat-options">
-              <label>回答方式<select id="provider"><option value="local">显示原文依据（默认）</option><option value="rag">本机生成回答</option><option value="external">外部模型（需确认发送范围）</option></select></label>
-              <label id="modelField" hidden>外部模型<input id="modelId" placeholder="模型配置 ID" /></label>
+              <label>回答方式<select id="provider"><option value="local">显示原文依据</option><option value="rag">本地生成回答</option><option value="external">在线生成回答（按保密等级确认）</option></select></label>
+              <label id="modelField" hidden>在线模型<select id="modelId" aria-label="选择在线模型"></select></label>
               <label>问题的保密程度<select id="queryLevel"><option value="L1">公开</option><option value="L2" selected>内部</option><option value="L3">保密</option></select></label>
               <button id="sendQuestion" class="primary" type="submit">提问</button>
             </div>
@@ -144,18 +147,15 @@
       </div>
 
       <div id="dataView" data-view="data" hidden>
+        <section class="panel" aria-labelledby="modelStatusTitle"><h3 id="modelStatusTitle">模型与索引</h3><p id="modelStatus">正在读取本机配置。</p><button id="checkOnlineServices" type="button">检查在线配置</button><p class="empty">检查只发送固定测试文本，不发送科研资料。</p></section>
         <section class="panel backup-panel" aria-labelledby="backupTitle">
-          <div class="panel-heading"><div><h3 id="backupTitle">备份与恢复</h3><p>按需要保存当前结果或完整资料包。</p></div></div>
-          <div class="backup-grid">
-            <section><h4>轻量备份</h4><p>保存课题目录、当前资料信息和有效记忆，不含原件与历史版本。</p><div class="button-row"><button id="exportLightLibrary" type="button">创建轻量备份</button><a id="downloadLightBackup" class="text-link" hidden download>下载轻量备份</a></div></section>
-            <section><h4>完整备份</h4><p>保存结构化数据、历史记录、检索索引和可用原件，缺失文件会写入清单。</p><button id="exportLibrary" type="button">创建完整备份</button><a id="downloadFullBackup" class="text-link" hidden download>下载完整备份</a></section>
-          </div>
-          <section class="restore-boundary"><h4>恢复完整备份</h4><p>选择不超过 200 MB 的新版完整备份并查看预览。只支持恢复到没有科研数据的账号，不覆盖已有资料；轻量备份和旧版完整备份不支持此恢复方式。</p><form id="restorePreviewForm"><label>选择完整备份 ZIP<input id="restoreFile" type="file" accept=".zip,application/zip" required></label><button type="submit">检查备份</button></form><div id="restorePreview" hidden><p id="restoreSummary" tabindex="-1"></p><label><input id="restoreConfirmed" type="checkbox">我已核对预览，确认恢复到当前空资料库</label><button id="restoreCommit" type="button" disabled>确认恢复</button></div></section>
+          <div class="panel-heading"><div><h3 id="backupTitle">轻量导出</h3><p>下载课题目录、当前资料信息和有效课题笔记；不含原件、历史版本，也不提供整库恢复。</p></div></div>
+          <div class="button-row"><button id="exportLightLibrary" type="button">创建轻量导出</button><a id="downloadLightBackup" class="text-link" hidden download>下载轻量导出文件</a></div>
         </section>
 
         <section class="panel governance-panel" aria-labelledby="governanceTitle">
           <div class="panel-heading"><div><h3 id="governanceTitle">版本与数据记录</h3><p>在这里处理当前资料的历史、冲突、撤销和回收站。</p></div><span class="tag">最近 10 次撤销 · 回收站保留 30 天</span></div>
-          <div class="review-actions governance-actions"><button id="deleteCurrent" class="danger" type="button">将当前资料移入回收站</button></div>
+          <div class="review-actions governance-actions"><button id="reindexCurrent" type="button">重建当前资料索引</button><button id="deleteCurrent" class="danger" type="button">将当前资料移入回收站</button></div>
           <div class="governance-grid">
             <section><h4>待处理冲突</h4><div id="conflictList" class="governance-list"></div></section>
             <section><h4>当前资料历史版本</h4><div id="versionList" class="governance-list"></div></section>

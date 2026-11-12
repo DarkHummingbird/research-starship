@@ -10,6 +10,12 @@ export FEISHU_WS_ENABLED=0
 export LANGFUSE_ENABLED=0
 export HOST=127.0.0.1
 export PORT="${PORT:-8787}"
+PROVIDER_CONFIG="${RESEARCH_PROVIDER_CONFIG:-$(cd "$PROJECT_ROOT/../.." && pwd)/运行数据/配置/providers.env}"
+if [[ -f "$PROVIDER_CONFIG" ]]; then
+  set -a
+  source "$PROVIDER_CONFIG"
+  set +a
+fi
 
 if [[ ! -x "$PYTHON" ]]; then
   echo "没有找到 Python 运行环境。请先按交付记录安装依赖，或设置 PERSONAL_AGENT_VENV。" >&2
@@ -17,7 +23,7 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 cd "$PROJECT_ROOT"
-"$PYTHON" -c 'from app.research.local_components import component_status; import sys; status=component_status(); missing=[name for name,item in status.items() if name != "rerank" and not item["available"]]; print("本地组件检查：", "、".join(missing) if missing else "生成、向量化和 OCR 均可用"); sys.exit(bool(missing))'
+"$PYTHON" -c 'from app.research.local_components import component_status; status=component_status(); missing=[name for name,item in status.items() if name != "rerank" and not item["available"]]; print("本地隐私组件：", "、".join(missing) if missing else "生成、向量化和 OCR 均可用"); print("非 L3 资料可使用已配置的 API；仅 L3 资料强制要求本地组件")'
 mkdir -p "$DATA_DIR" "$RESEARCH_DATA_DIR"
 if [[ -z "${AUTH_SECRET:-}" ]]; then
   SECRET_FILE="$RESEARCH_DATA_DIR/.auth-secret"

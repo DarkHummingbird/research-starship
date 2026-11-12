@@ -33,7 +33,7 @@ async function request(path, opts = {}) {
   }
 }
 
-async function rawRequest(path, { method = "GET", json, timeout = LIGHT_TIMEOUT } = {}) {
+async function rawRequest(path, { method = "GET", json, form, timeout = LIGHT_TIMEOUT } = {}) {
   const ctrl = new AbortController();
   const timer = window.setTimeout(() => ctrl.abort(), timeout);
   let res;
@@ -42,7 +42,7 @@ async function rawRequest(path, { method = "GET", json, timeout = LIGHT_TIMEOUT 
     res = await fetch(path, {
       method,
       headers: json !== undefined ? { "Content-Type": "application/json" } : undefined,
-      body: json !== undefined ? JSON.stringify(json) : undefined,
+      body: json !== undefined ? JSON.stringify(json) : form,
       signal: ctrl.signal,
       credentials: "same-origin",
     });
@@ -182,16 +182,27 @@ export const api = {
   capabilities() {
     return request("/api/capabilities");
   },
-  async chat(message, { replyTo, threadId } = {}) {
+  async chat(message, { replyTo, threadId, attachmentId = "" } = {}) {
     const owner = currentUserId();
     const res = await turnRequest("/api/chat", {
       user_id: owner,
       message: message || "",
       reply_to: replyTo || null,
       thread_id: threadId || chatThread(owner) || null,
+      attachment_ids: attachmentId ? [attachmentId] : [],
     });
     rememberThread(owner, res.thread_id);
     return res;
+  },
+  uploadAttachment(file, confidentiality, allowOutbound) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("confidentiality", confidentiality);
+    form.append("allow_outbound", String(allowOutbound));
+    return request("/api/attachments", { method: "POST", form, timeout: TURN_TIMEOUT });
+  },
+  deleteAttachment(id) {
+    return request(`/api/attachments/${enc(id)}`, { method: "DELETE" });
   },
   /** Explicit writing request: always a fresh draft thread. */
   draft(requestText) {

@@ -32,7 +32,7 @@ class Clock:
 @pytest.fixture
 def crawl(monkeypatch, tmp_path):
     for key in (*http.SECRET_ENV, "RSSHUB_BASE_URL", "SEARXNG_URL", "X_MONTHLY_SPEND_CAP_USD",
-                "CRAWL_POLICY_OVERRIDES"):
+                "CRAWL_POLICY_OVERRIDES", "CRAWL_DNS_ALLOWLIST"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(socket, "create_connection", Mock(side_effect=AssertionError("Real network forbidden")))
     monkeypatch.setattr(socket.socket, "connect", Mock(side_effect=AssertionError("Real network forbidden")))

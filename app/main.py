@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -80,11 +80,13 @@ from app.research.api import (  # noqa: E402
     research_error_handler,
     router as research_router,
 )
+from app.agent.attachments import AttachmentError  # noqa: E402
 
 app.include_router(admin_router)
 app.include_router(research_router)
 app.add_exception_handler(research_service.ResearchError, research_error_handler)
 app.add_exception_handler(research_gateway.PolicyError, research_policy_error_handler)
+app.add_exception_handler(AttachmentError, research_error_handler)
 # Every user-scoped /api call is bound to the server session (outermost).
 from app.session_identity import SESSION_COOKIE, SessionIdentityMiddleware, new_anonymous_user_id, session_user  # noqa: E402
 
@@ -886,6 +888,44 @@ def continue_budget(body: ContinueTaskRequest, uid: str = Depends(require_user))
     )
 
 
+@app.post("/api/attachments", status_code=201)
+async def upload_attachment(
+    file: UploadFile = File(...),
+    confidentiality: str = Form("L2"),
+    allow_outbound: bool = Form(False),
+    uid: str = Depends(require_user),
+) -> ApiResponse:
+    from app.agent import attachments
+
+    content = await file.read(attachments.MAX_DOCUMENT_BYTES + 1)
+    result = attachments.create_attachment(
+        uid, filename=file.filename or "", content=content,
+        confidentiality=confidentiality, allow_outbound=allow_outbound,
+    )
+    return ApiResponse(status=result["status"], data={"attachment": result})
+
+
+@app.get("/api/attachments")
+def attachment_list(uid: str = Depends(require_user)) -> ApiResponse:
+    from app.agent import attachments
+
+    return ApiResponse(status="attachments", data={"items": attachments.list_attachments(uid)})
+
+
+@app.get("/api/attachments/{attachment_id}")
+def attachment_detail(attachment_id: str, uid: str = Depends(require_user)) -> ApiResponse:
+    from app.agent import attachments
+
+    return ApiResponse(status="attachment", data={"attachment": attachments.get_attachment(uid, attachment_id)})
+
+
+@app.delete("/api/attachments/{attachment_id}")
+def attachment_delete(attachment_id: str, uid: str = Depends(require_user)) -> ApiResponse:
+    from app.agent import attachments
+
+    return ApiResponse(status="deleted", data={"attachment": attachments.delete_attachment(uid, attachment_id)})
+
+
 @app.post("/api/chat")
 def chat(body: ChatRequest) -> ApiResponse:
     return turn_results.run(body.request_id, lambda: _chat(body))
@@ -917,6 +957,18 @@ def _chat(body: ChatRequest) -> ApiResponse:
         redacted, hits = _privacy_gate(msg)
         if hits:
             return _privacy_response(body.user_id, tid, redacted, hits, raw=msg)
+
+    if body.attachment_ids and msg:
+        from app.agent import attachments
+
+        attachment_id = body.attachment_ids[0]
+        attachments.validate_attachment(body.user_id, attachment_id, tid)
+        out = run_action(
+            {"user_id": body.user_id, "action": "chat", "message": msg,
+             "attachment_id": attachment_id, "channel": "web"},
+            thread_id=tid,
+        )
+        return _chat_intent_response(out, "chat", user_id=body.user_id)
 
     from app.agent.router import intent_result_for
     intent_state = {"user_id": body.user_id, "message": msg, "action": ""}

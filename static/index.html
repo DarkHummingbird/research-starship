@@ -51,7 +51,25 @@
           新消息
         </button>
         <div class="composer-inner">
+          <div id="attachmentPreview" class="attachment-preview" hidden></div>
+          <div id="attachmentOptions" class="attachment-options" hidden>
+            <label>保密程度
+              <select id="attachmentConfidentiality" aria-label="附件保密程度">
+                <option value="L1">公开资料</option>
+                <option value="L2" selected>内部资料</option>
+                <option value="L3">保密资料，仅本机处理</option>
+              </select>
+            </label>
+            <label class="attachment-outbound">
+              <input id="attachmentOutbound" type="checkbox" />
+              允许将附件、解析片段和本条消息发送给当前在线模型；不勾选则仅本机处理
+            </label>
+          </div>
           <div class="composer-shell" id="composerShell">
+            <input id="attachmentInput" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.docx,.md,.markdown" hidden />
+            <button type="button" class="btn btn-ghost btn-attachment" id="btnAttachment" aria-label="添加图片或文件" title="添加图片或文件，默认仅本次对话">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 0 1 5.7 5.7l-9.6 9.6a2 2 0 0 1-2.8-2.8l8.9-8.9"/></svg>
+            </button>
             <label class="sr-only" for="composerInput">给小助发消息</label>
             <textarea id="composerInput" rows="1" enterkeyhint="send"
               placeholder="和我聊聊，或者说「帮我写一封邮件」"

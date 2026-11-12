@@ -4,6 +4,7 @@ import { api } from "./api.js?v=__APP_VERSION__";
 import { currentUserId, ensureSession } from "./identity.js?v=__APP_VERSION__";
 import { store } from "./store.js?v=__APP_VERSION__";
 import { initThread } from "./thread.js?v=__APP_VERSION__";
+import { initAttachments } from "./attachments.js?v=__APP_VERSION__";
 import { initComposer, focusComposer } from "./composer.js?v=__APP_VERSION__";
 import { initDrawer, loadProfile, resetDrawer } from "./drawer.js?v=__APP_VERSION__";
 import {
@@ -81,6 +82,7 @@ async function boot() {
   if (DEBUG) document.body.classList.add("is-debug");
   initThread();
   initSchedules();
+  initAttachments();
   initComposer({ onSubmit: sendComposer });
   initDrawer({ onUserChange, onProfileEdited: noteProfileEdited, onClearLocal });
   $("btnMemory").addEventListener("click", () => askMemory());

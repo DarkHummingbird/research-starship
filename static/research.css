@@ -172,6 +172,16 @@ summary { cursor: pointer; color: var(--ink); }
 .message.assistant { justify-self: start; background: var(--paper); border: 1px solid var(--line); }
 .message p { white-space: pre-wrap; margin: 0; font-size: 15px; }
 .message small { display: block; margin-top: 8px; color: var(--muted); }
+.note-saver { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.note-saver > summary { font-size: 13px; font-weight: 500; }
+.note-saver > p { margin: 10px 0; color: var(--muted); font-size: 12px; white-space: normal; }
+.note-saver form { display: grid; gap: 10px; }
+.note-saver button { justify-self: start; }
+.note-trust { margin: 12px 0; padding: 12px 14px; border-left: 3px solid var(--warning); border-radius: var(--radius-control); background: var(--warning-soft); }
+.note-trust > p { margin: 0; color: var(--warning); font-size: 13px; }
+.note-trust details { margin-top: 8px; font-size: 12px; }
+.note-trust blockquote { margin: 8px 0; color: var(--muted); white-space: pre-wrap; }
+.note-trust button { min-height: 32px; padding: 4px 10px; font-size: 12px; }
 .source-card { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; }
 .source-card summary { cursor: pointer; color: var(--ink); font-weight: 500; }
 .source-card blockquote { margin: 10px 0 0; padding-left: 13px; border-left: 2px solid var(--peach); color: var(--muted); white-space: pre-wrap; }

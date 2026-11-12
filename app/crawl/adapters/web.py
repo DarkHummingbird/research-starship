@@ -1,8 +1,9 @@
 import asyncio
+import json
 import os
 
 from . import optional
-from ..errors import CrawlError
+from ..errors import CrawlError, NotConfigured
 from ..http import USER_AGENT, resolve_public
 
 
@@ -16,6 +17,21 @@ def fetch_web(name, ctx, params):
             raise CrawlError("Web fetch failed")
         text = extractor.extract(response.text, include_comments=False, include_tables=True)
         return [{"url": url, "title": "", "markdown": text, "snippet": text}] if text else []
+    if name == "web.deepseek":
+        if not os.getenv("DEEPSEEK_API_KEY"):
+            raise NotConfigured("未配置 DeepSeek 网页读取（需要 DEEPSEEK_API_KEY）")
+        response = ctx.get(url)
+        if response.status_code != 200:
+            raise CrawlError("Web fetch failed")
+        url = response.url
+        data = ctx.json(
+            "https://api.deepseek.com/v1/tools/fetch",
+            headers={"Accept": "application/json", "Content-Type": "application/json",
+                     "Authorization": "Bearer " + os.environ["DEEPSEEK_API_KEY"]},
+            method="POST", body=json.dumps({"url": url}), check_robots=False,
+        )
+        content = data.get("content") or ""
+        return [{"url": url, "title": data.get("title") or "", "markdown": content, "snippet": content}] if content else []
     if name == "web.jina":
         # Validate every origin redirect before the reader proxy can fetch it.
         response = ctx.get(url)

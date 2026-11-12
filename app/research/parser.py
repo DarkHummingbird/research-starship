@@ -16,6 +16,32 @@ DOCUMENT_SCHEMA: dict[str, Any] = {
         "schema_version": {"const": "research-document/v1"},
         "title": {"type": "string", "minLength": 1, "maxLength": 300},
         "record_type": {"const": "source_statement"},
+        "note_type": {"enum": ["source_fact", "ai_summary", "experiment_idea", "user_record"]},
+        "note_validity": {"enum": ["valid", "source_changed", "source_withdrawn"]},
+        "note_provenance": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["document_id", "version", "chunk_id", "title", "chapter", "quote", "locator", "confidentiality"],
+                "properties": {
+                    "document_id": {"type": "string", "minLength": 1},
+                    "version": {"type": "integer", "minimum": 1},
+                    "chunk_id": {"type": "string", "minLength": 1},
+                    "title": {"type": "string"},
+                    "chapter": {"type": "string"},
+                    "quote": {"type": "string", "minLength": 1},
+                    "locator": {"type": "object"},
+                    "confidentiality": {"enum": ["L1", "L2", "L3"]},
+                },
+            },
+        },
+        "model_info": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"model": {"type": "string"}, "task_id": {"type": "string"}},
+        },
         "research_fields": {
             "type": "object",
             "additionalProperties": False,

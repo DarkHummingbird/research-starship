@@ -92,12 +92,56 @@ def import_document(
             }
     embedding_result = index_document(user_id, document_id)
     result["embedding_status"] = embedding_result["embedding_status"]
+    if embedding_result.get("approval"):
+        result["approval"] = embedding_result["approval"]
     if embedding_result.get("processing_error"):
         result["processing_error"] = embedding_result["processing_error"]
     return result
 
 
-def index_document(user_id: str, document_id: str, *, expected_version: int | None = None) -> dict[str, Any]:
+def _online_embedding(
+    user_id: str,
+    row,
+    chunks,
+    *,
+    task_id: str = "",
+    approval_id: str = "",
+) -> dict[str, Any] | None:
+    if row.confidentiality == "L3" or not chunks:
+        return None
+    from app.research.online import embedding_spec, embed_texts as embed_online
+
+    spec = embedding_spec()
+    if not spec.has_key():
+        return None
+    fragments = [{
+        "document_id": row.id, "version": row.version, "chunk_id": chunk.id,
+        "chapter": chunk.chapter, "snippet": chunk.content, "classification": row.confidentiality,
+        "sha256": hashlib.sha256(chunk.content.encode("utf-8")).hexdigest(),
+    } for chunk in chunks]
+    task = task_id or "task_" + uuid.uuid4().hex
+    approval = gateway.prepare(
+        user_id, row.project_id, task_id=task, provider=spec.vendor, model_id=spec.id,
+        destination=spec.base_url, purpose="科研资料向量索引", operation="embedding", fragments=fragments,
+    )
+    if approval["status"] != "approved":
+        return {"embedding_status": "awaiting_approval", "approval": approval}
+    if approval_id and approval["id"] != approval_id:
+        raise gateway.PolicyError(409, "approval_scope_changed", "索引资料或版本已变化，请重新审批")
+    return gateway.execute_once(
+        user_id, approval["id"],
+        lambda _approval: embed_online(spec, [chunk.content for chunk in chunks]),
+    )
+
+
+def index_document(
+    user_id: str,
+    document_id: str,
+    *,
+    expected_version: int | None = None,
+    task_id: str = "",
+    approval_id: str = "",
+) -> dict[str, Any]:
     from app.data_access.research import migration_session
     from app.research.task_control import check_cancelled
     with migration_session() as conn:
@@ -119,10 +163,23 @@ def index_document(user_id: str, document_id: str, *, expected_version: int | No
     failure = "存在待 OCR 页面，向量化暂停" if needs_ocr else ""
     output = None
     if not needs_ocr:
-        try:
-            output = embed_texts(contents)
-        except LocalComponentError as exc:
-            failure = exc.message or "本地向量化失败"
+        output = _online_embedding(user_id, row, chunks, task_id=task_id, approval_id=approval_id)
+        if output and output.get("embedding_status") == "awaiting_approval":
+            with memory_session() as conn:
+                pending_row = conn.execute(select(store.ResearchDocument).where(
+                    store.ResearchDocument.id == document_id, store.ResearchDocument.user_id == user_id
+                )).scalar_one_or_none()
+                if pending_row is None or pending_row.version != version:
+                    return {"embedding_status": "stale", "processing_error": "资料版本已变化"}
+                pending_row.embedding_status = "awaiting_approval"
+                pending_row.processing_error = "在线向量索引等待外发确认"
+                conn.flush()
+            return output
+        if output is None:
+            try:
+                output = embed_texts(contents)
+            except LocalComponentError as exc:
+                failure = exc.message or "本地向量化失败"
     check_cancelled()
     with memory_session() as conn:
         row = conn.execute(select(store.ResearchDocument).where(
@@ -150,5 +207,6 @@ def index_document(user_id: str, document_id: str, *, expected_version: int | No
                 dimensions=output["dimensions"], created_at=store.utc_now(),
             ))
         row.embedding_status = "ready"
+        row.processing_error = ""
         conn.flush()
         return {"embedding_status": "ready", "model": output["model"], "count": len(chunks)}
