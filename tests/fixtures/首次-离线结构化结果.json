@@ -1,0 +1,13 @@
+{
+  "网络": "PermissionError errno=1",
+  "exit_code": 0,
+  "秒": 2.78,
+  "peak_rss_bytes": 6449807360,
+  "json_parse": true,
+  "data": {
+    "entry": "首次使用时，在左侧点击“新建课题”，输入课题名称、研究目标和备注。用户可以在课题列表中切换当前课题。创建课题后，系统显示空资料库。",
+    "retention_days": 30,
+    "confidential": "保密资料仅可在本地离线处理",
+    "source": "4. 删除与恢复"
+  }
+}

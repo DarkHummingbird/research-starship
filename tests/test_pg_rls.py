@@ -1,3 +1,4 @@
+import re
 """AC1–AC6: real Postgres, raw SQL, synthetic rows, disposable CI database only."""
 import importlib.util
 import os
@@ -78,6 +79,11 @@ def pg():
 
 
 def row_for(table, uid, number):
+    allowed = {}
+    for constraint in table.constraints:
+        match = re.search(r"(\w+)\s+IN\s*\(([^)]+)\)", str(getattr(constraint, "sqltext", "")))
+        if match:
+            allowed[match.group(1)] = re.findall(r"'([^']+)'", match.group(2))
     row = {}
     for column in table.c:
         if column.name == "user_id":
@@ -94,8 +100,8 @@ def row_for(table, uid, number):
             value = datetime(2026, 1, 1, tzinfo=timezone.utc)
         elif isinstance(column.type, LargeBinary):
             value = bytes(4096)
-        elif column.name == "kind" and table.name == "research_state_entries":
-            value = "open_question"
+        elif column.name in allowed:
+            value = allowed[column.name][0]
         elif column.name.endswith("_json"):
             value = "{}"
         else:

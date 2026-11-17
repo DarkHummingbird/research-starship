@@ -270,8 +270,8 @@ def test_private_timeout_is_not_retried(client, user, research_dir):
 
 
 def test_p0_schema_type_and_source_regressions():
-    first = json.loads((P0_ROOT / "首次-离线结构化结果.json").read_text())["data"]
-    second = json.loads((P0_ROOT / "离线结构化结果.json").read_text())["data"]
+    first = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "首次-离线结构化结果.json").read_text())["data"]
+    second = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "离线结构化结果.json").read_text())["data"]
     with pytest.raises(ExtractionValidationError):
         validate_p0_model_result(first, {1, 2, 3, 4, 5})
     with pytest.raises(ExtractionValidationError) as wrong_type:

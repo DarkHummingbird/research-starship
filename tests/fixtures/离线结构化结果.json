@@ -1,0 +1,27 @@
+{
+  "网络": "PermissionError errno=1",
+  "exit_code": 0,
+  "秒": 4.97,
+  "peak_rss_bytes": 6456508416,
+  "json_parse": true,
+  "data": {
+    "entry": {
+      "rule": "点击“导入资料”选择本地文件，选择公开、内部或保密等级，再查看解析预览。点击“确认入库”后，资料才进入当前课题的正式资料库。预览中的内容可以修改或取消。",
+      "source": {
+        "chapter": 2
+      }
+    },
+    "retention_days": {
+      "rule": "回收站保留 30 天。到期后先提醒用户，用户再次确认后才清理系统里的记录。",
+      "source": {
+        "chapter": 4
+      }
+    },
+    "confidential": {
+      "rule": "保密资料仅可在本地离线处理。",
+      "source": {
+        "chapter": 5
+      }
+    }
+  }
+}
