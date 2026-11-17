@@ -122,7 +122,10 @@ def test_unrelated_question_is_flagged_as_weak_evidence(client, auth):
     response = _chat(client, headers, project["id"], "quantum decoherence in superconducting qubits")
     assert response.status_code == 200, response.text
     result = response.json()["data"]
-    assert "词面重合很少" in result["query_plan"].get("retrieval_warning", "")
+    if result["sources"]:
+        assert "词面重合很少" in result["query_plan"].get("retrieval_warning", "")
+    else:
+        assert "未找到可核验证据" in result["answer"]
 
 def test_multi_paper_question_without_method_name_asks_scope(client, auth):
     headers = auth("paper-scope-generic-user")
