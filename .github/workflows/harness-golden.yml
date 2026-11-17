@@ -35,6 +35,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: harness-golden-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   golden-mock:
     runs-on: ubuntu-latest
