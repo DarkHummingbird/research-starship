@@ -27,7 +27,15 @@
         </div>
       </div>
     </div>
-    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><div class="task-center-tabs"><button id="taskTabTasks" type="button" class="active">任务</button><button id="taskTabSchedules" type="button">定时与提醒</button></div><p>资料、问答和轻量导出任务可在文件接收完成后刷新查看。处理中的外部请求不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div><div id="scheduleList" hidden></div></div></details>
+    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><div class="task-center-tabs"><button id="taskTabTasks" type="button" class="active">任务</button><button id="taskTabSchedules" type="button">定时与提醒</button></div><p>资料、问答和轻量导出任务可在文件接收完成后刷新查看。处理中的外部请求不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div><div id="scheduleList" hidden></div>
+          <form id="scheduleForm" class="compact-form" hidden>
+            <h3>新建定时任务</h3>
+            <label>任务名称<input id="scheduleName" required placeholder="例如：每周文献跟踪" /></label>
+            <label>提醒或执行内容<textarea id="schedulePrompt" rows="2" required placeholder="例如：提醒我检查待确认资料"></textarea></label>
+            <label>Cron 表达式<input id="scheduleCron" required placeholder="例如：0 8 * * *（每天 8 点）" /></label>
+            <label>时区<input id="scheduleTz" value="Asia/Shanghai" /></label>
+            <button class="primary" type="submit">创建</button>
+          </form></div></details>
     <button id="dataManagementShortcut" class="quiet-button" type="button">数据与隐私</button>
   </header>
 

@@ -2225,14 +2225,14 @@ async function loadSchedules() {
   const items = result.schedules || [];
   list.replaceChildren();
   if (!items.length) {
-    list.innerHTML = '<p class="empty">还没有定时任务。可以在自由讨论中说明需求，由系统确认后创建。</p>';
+    list.innerHTML = '<p class="empty">还没有定时任务。可以在下方新建。</p>';
     return;
   }
   for (const item of items) {
     const row = document.createElement("div");
     row.className = "task-item";
     const text = document.createElement("p");
-    const trigger = item.trigger ? (item.trigger.cron || item.trigger.every || item.trigger.at || "") : "";
+    const trigger = item.trigger ? (item.trigger.cron || item.trigger.expr || item.trigger.every || item.trigger.at || "") : "";
     text.textContent = `${item.name || item.job_kind || "定时任务"} · ${trigger} · ${item.status} · 运行 ${item.run_count || 0} 次`;
     row.append(text);
     const toggle = document.createElement("button");
@@ -2264,12 +2264,14 @@ $("taskTabTasks").addEventListener("click", () => {
   $("taskTabSchedules").classList.remove("active");
   $("taskList").hidden = false;
   $("scheduleList").hidden = true;
+  $("scheduleForm").hidden = true;
 });
 $("taskTabSchedules").addEventListener("click", async () => {
   $("taskTabSchedules").classList.add("active");
   $("taskTabTasks").classList.remove("active");
   $("taskList").hidden = true;
   $("scheduleList").hidden = false;
+  $("scheduleForm").hidden = false;
   try { await loadSchedules(); } catch (error) { toast(error.message); }
 });
 
@@ -2302,5 +2304,24 @@ $("workProfileForm").addEventListener("submit", async (event) => {
       },
     })});
     toast("工作档案已保存");
+  } catch (error) { toast(error.message); }
+});
+
+
+$("scheduleForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/schedules", {method: "POST", body: JSON.stringify({
+      name: $("scheduleName").value.trim(),
+      job_kind: "custom_nl",
+      prompt_text: $("schedulePrompt").value.trim(),
+      trigger: {type: "cron", expr: $("scheduleCron").value.trim()},
+      tz: $("scheduleTz").value.trim() || "Asia/Shanghai",
+      delivery: "in_app", channel_preference: "auto", enabled: true,
+    })});
+    toast("定时任务已创建");
+    $("scheduleName").value = "";
+    $("schedulePrompt").value = "";
+    await loadSchedules();
   } catch (error) { toast(error.message); }
 });

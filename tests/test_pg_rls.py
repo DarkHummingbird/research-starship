@@ -94,6 +94,8 @@ def row_for(table, uid, number):
             value = datetime(2026, 1, 1, tzinfo=timezone.utc)
         elif isinstance(column.type, LargeBinary):
             value = bytes(4096)
+        elif column.name == "kind" and table.name == "research_state_entries":
+            value = "open_question"
         elif column.name.endswith("_json"):
             value = "{}"
         else:

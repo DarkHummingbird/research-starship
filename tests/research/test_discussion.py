@@ -59,3 +59,23 @@ def test_writing_kind_is_available_in_generation_and_ui():
     html = (Path(__file__).resolve().parents[2] / "static/research.html").read_text(encoding="utf-8")
     assert 'value="writing"' in html
     assert 'data-view-target="discussion"' in html
+
+def test_discussion_includes_work_profile_as_background(client, auth, monkeypatch):
+    from app.data_access import user_scope
+    from app.db import save_profile
+
+    calls = _configure(monkeypatch)
+    uid = "discussion-profile-user"
+    with user_scope(uid):
+        save_profile(uid, {"name": "贾东霖", "interests": ["混合检索"]})
+    headers = auth(uid)
+    project = _project(client, headers)
+    response = client.post(
+        f"/api/research/projects/{project['id']}/discussion",
+        json={"message": "帮我拆问题", "model_id": "deepseek-chat", "query_confidentiality": "L1"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    prompt = calls.call_args.kwargs["user"]
+    assert "贾东霖" in prompt and "混合检索" in prompt
+    assert "仅作背景，不是证据" in prompt

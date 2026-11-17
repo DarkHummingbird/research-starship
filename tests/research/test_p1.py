@@ -11,7 +11,7 @@ from app.research.parser import ExtractionValidationError, validate_document_car
 
 
 P0_ROOT = Path(__file__).resolve().parents[3]
-TUTORIAL = (P0_ROOT / "测试样本" / "虚构Agent使用教程.md").read_bytes()
+TUTORIAL = (Path(__file__).resolve().parents[1] / "fixtures" / "虚构Agent使用教程.md").read_bytes()
 
 
 @pytest.fixture

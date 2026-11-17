@@ -1200,6 +1200,33 @@ def chat(
     }
 
 
+def work_profile_context(user_id: str) -> str:
+    from app.db import read_profile_data
+
+    profile = read_profile_data(user_id) or {}
+    lines = []
+    for key, label in (("name", "姓名"), ("occupation", "角色"), ("tz", "时区")):
+        value = str(profile.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}：{value}")
+    for key, label in (("interests", "研究方向"), ("preferences", "工作偏好"), ("facts", "背景事实")):
+        values = [str(item).strip() for item in (profile.get(key) or []) if str(item).strip()]
+        if values:
+            lines.append(f"{label}：{'、'.join(values[:8])}")
+    return "\n".join(lines)
+
+
+def work_profile_fragment(user_id: str, classification: str) -> dict[str, Any] | None:
+    text = work_profile_context(user_id)
+    if not text:
+        return None
+    return {
+        "document_id": None, "version": 0, "chunk_id": "work-profile", "chapter": "工作档案",
+        "snippet": text, "classification": classification,
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
 DISCUSSION_SYSTEM = ("你是科研工作台中的自由讨论助手，帮助用户理清思路、解释概念、讨论方案。"
                      "你没有查阅用户的资料，不得编造来源、指标或实验结果；需要依据论文内容回答时，提醒用户到课题问答中核验。")
 
@@ -1234,9 +1261,14 @@ def discuss(
         "snippet": message, "classification": query_confidentiality,
         "sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
     }
+    fragments = [fragment]
+    profile_fragment = work_profile_fragment(user_id, query_confidentiality)
+    if profile_fragment:
+        fragments.append(profile_fragment)
+        prompt = "用户工作档案（仅作背景，不是证据）：\n" + profile_fragment["snippet"] + "\n\n" + prompt
     result = generate_online(
         user_id, project_id, model_id=model_id, task_id=task_id, approval_id=approval_id,
-        purpose="自由讨论", operation="qa", prompt=prompt, fragments=[fragment],
+        purpose="自由讨论", operation="qa", prompt=prompt, fragments=fragments,
         max_tokens=1500, system=DISCUSSION_SYSTEM,
     )
     if result["status"] == "awaiting_outbound_approval":
