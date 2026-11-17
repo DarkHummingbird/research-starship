@@ -65,7 +65,7 @@ def get_task(uid, task_id):
 
 def list_tasks(uid):
     with migration_session() as conn:
-        active = conn.scalars(select(store.ResearchAsyncTask).where(store.ResearchAsyncTask.user_id == uid, store.ResearchAsyncTask.status.in_(['queued', 'processing', 'cancelling', 'awaiting_approval'])).order_by(store.ResearchAsyncTask.created_at.desc())).all()
+        active = conn.scalars(select(store.ResearchAsyncTask).where(store.ResearchAsyncTask.user_id == uid, store.ResearchAsyncTask.status.in_(['queued', 'processing', 'cancelling', 'awaiting_approval', 'needs_clarification'])).order_by(store.ResearchAsyncTask.created_at.desc())).all()
         recent = conn.scalars(select(store.ResearchAsyncTask).where(store.ResearchAsyncTask.user_id == uid, store.ResearchAsyncTask.status.not_in(['queued', 'processing', 'cancelling', 'awaiting_approval'])).order_by(store.ResearchAsyncTask.created_at.desc()).limit(100)).all()
         result = []
         for row in [*active, *recent]:
@@ -80,6 +80,13 @@ def create(uid, project_id, kind, request):
     from app.research.service import ResearchError, _project, _document
     if kind not in {'chat', 'generation', 'upload'} | NETWORK_KINDS | GLOBAL_KINDS:
         raise ResearchError(400, 'task_kind_invalid', '不支持的任务类型')
+    from app.research import local_mode
+    if request.get('provider') == 'rag':
+        local_mode.require_enabled(uid)
+    if request.get('query_confidentiality') == 'L3' or request.get('confidentiality') == 'L3':
+        local_mode.require_l3(uid)
+    if request.get('chunking_strategy') == 'semantic':
+        local_mode.require_enabled(uid)
     with memory_session() as conn:
         if kind not in GLOBAL_KINDS:
             _project(conn, uid, project_id)
@@ -93,7 +100,7 @@ def create(uid, project_id, kind, request):
             versions[doc_id] = document.version
         request = {**request, '_versions': versions}
         task_id = 'tsk_' + uuid.uuid4().hex
-        if (kind in NETWORK_KINDS or kind == 'chat') and not request.get('task_id'):
+        if (kind in NETWORK_KINDS or kind in {'chat', 'generation'}) and not request.get('task_id'):
             request['task_id'] = task_id
         row = store.ResearchAsyncTask(id=task_id, user_id=uid, project_id=project_id, kind=kind,
             status='queued', request_json=json.dumps(request, ensure_ascii=False), result_json='{}', error='',
@@ -166,9 +173,11 @@ def _run(task_id):
             with memory_session() as conn:
                 row = conn.scalar(select(store.ResearchAsyncTask).where(store.ResearchAsyncTask.id == task_id))
                 row.result_json = json.dumps(result, ensure_ascii=False)
-                row.status = 'awaiting_approval' if result.get('status') == 'awaiting_outbound_approval' else 'completed'
-                row.completed_at = '' if row.status == 'awaiting_approval' else store.utc_now()
+                row.status = 'awaiting_approval' if result.get('status') == 'awaiting_outbound_approval' else 'needs_clarification' if result.get('status') == 'needs_clarification' else 'completed'
+                row.completed_at = '' if row.status in {'awaiting_approval', 'needs_clarification'} else store.utc_now()
         except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("research async task %s (%s) failed", task_id, kind)
             with memory_session() as conn:
                 row = conn.scalar(select(store.ResearchAsyncTask).where(store.ResearchAsyncTask.id == task_id))
                 row.status = 'cancelled' if isinstance(exc, TaskCancelled) else 'failed'
@@ -184,7 +193,7 @@ def _run(task_id):
                         row.error = '外部请求已发出，最终结果未能安全保存；请核对服务记录，勿重复提交'
                 if kind in {'upload', 'restore_confirm', 'backup_full', 'backup_light'} and not isinstance(exc, ResearchError):
                     row.status = 'unknown'
-                    row.error = '处理可能已部分完成，请先核对资料库或备份文件，再决定是否重新发起'
+                    row.error = f'{type(exc).__name__}: {str(exc)[:400]}；处理可能已部分完成，请先核对资料库或备份文件，再决定是否重新发起'
                 if isinstance(exc, ResearchError):
                     row.result_json = json.dumps({'code': exc.code, **exc.data}, ensure_ascii=False)
                 row.completed_at = store.utc_now()
@@ -253,6 +262,8 @@ def resume(uid, task_id):
         payload.update({'task_id': approval['task_id'], 'approval_id': approval['id']})
         if row.kind == 'chat':
             payload['conversation_id'] = result['conversation_id']
+            if result.get('query_plan'):
+                payload['query_plan'] = result['query_plan']
         row.request_json = json.dumps(payload, ensure_ascii=False)
         row.status = 'queued'; row.error = ''
     _pool.submit(_run, task_id)

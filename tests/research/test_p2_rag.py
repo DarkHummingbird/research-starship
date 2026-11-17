@@ -15,6 +15,8 @@ TUTORIAL = (P0_ROOT / "测试样本" / "虚构Agent使用教程.md").read_bytes(
 def approved_tutorial(client, auth, tmp_path, monkeypatch):
     from app.data_access import user_scope
 
+    if not component_status()["embedding"]["available"]:
+        pytest.skip("local embedding assets unavailable")
     monkeypatch.setenv("RESEARCH_DATA_DIR", str(tmp_path / "research"))
     uid = "p2-rag-user"
     headers = auth(uid)

@@ -55,7 +55,7 @@ task ──route()──▶ tier (fast/strong) ──▶ 有序模型链 [m1, m2
 ```
 
 模型字段：`provider`、`protocol`(`openai`|`anthropic`)、`base_url`、`api_key_env`（逗号分隔多个 env 名，按序取第一个非空）、
-`model`、`price.input/output`（每百万 token）、`price.currency`、`timeout`、`max_tokens`、`params`（原样并入请求体）、
+`model`、`price.input/output`（每百万 token）、`price.currency`、`timeout`、`connect_timeout`、`max_tokens`、`params`（原样并入请求体）、
 `max_concurrency` / `rpm` / `limit_group`。provider 上的字段被模型继承，模型可覆盖。
 没有 key 的模型在链中自动跳过；整条链都没 key → mock（与原来一致）。
 
@@ -72,6 +72,7 @@ task ──route()──▶ tier (fast/strong) ──▶ 有序模型链 [m1, m2
 读取 `SILICONFLOW_API_KEY`。可在原有 `LLM_CONFIG_FILE` / `LLM_CONFIG_JSON` 中声明模型，
 再用 `"embedding_tasks": {"memory_embed": "已声明的模型 id"}` 覆盖路由；聊天的 `tasks` / `tiers` 不变。
 客户端复用网关 HTTP 连接池和错误分类，缺少 key 或返回无效向量会报错，不生成假向量。
+科研检索也使用同一任务路由。Qwen 可通过 `embedding_tasks` / `rerank_tasks` 配置；Embedding 使用 `/embeddings` 并按百炼限制每 20 条分批，Rerank 使用 `/reranks`。Key 仍由 `api_key_env` 引用，不写入模型 JSON。
 
 `app.data_access.memory_facts` 提供 `add_fact`、`get_fact`、`invalidate_fact`、`delete_fact`、
 `forget_all`、`knn(query_vec, k)`。必须处于服务器设置的 `user_scope`；传入的 `user_id` 被忽略。

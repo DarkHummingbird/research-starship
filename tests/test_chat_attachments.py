@@ -14,7 +14,13 @@ from app.gateway.config import ModelSpec
 
 @pytest.fixture(autouse=True)
 def no_embedding(monkeypatch):
-    monkeypatch.setattr(attachments, "_embedding", lambda chunks: "")
+    monkeypatch.setattr(attachments, "_embedding", lambda user_id, chunks: "")
+    monkeypatch.setattr(attachments, "component_status", lambda: {
+        "embedding": {"available": False},
+        "generative_llm": {"available": True},
+        "ocr": {"available": False},
+        "rerank": {"available": False},
+    })
 
 
 def upload(client, headers, content=b"# Notes\n\nThe candidate limit is 100.", filename="notes.md", **data):

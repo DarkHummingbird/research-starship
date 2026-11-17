@@ -90,7 +90,7 @@ def test_latex_without_style_samples_adds_deterministic_disclosure(client, auth,
     })
     response = client.post(
         f"/api/research/projects/{project_id}/generations",
-        json={"kind": "latex", "query": "模仿我的风格写局部实验设置", "document_ids": [baseline["id"]]},
+        json={"kind": "latex", "query": "模仿我的风格写局部实验设置", "document_ids": [baseline["id"]], "provider": "rag"},
         headers=headers,
     )
     assert response.status_code == 201, response.text
@@ -132,7 +132,7 @@ def test_mixed_model_facts_are_quarantined_with_raw_output_and_review_gate(clien
     monkeypatch.setattr(paper_analysis, "generate", lambda *_args, **_kwargs: {
         "text": json.dumps(raw) + " [end of text]", "model": "test-double",
     })
-    response = client.post(f"/api/research/documents/{document['id']}/analysis", headers=headers)
+    response = client.post(f"/api/research/documents/{document['id']}/analysis", json={"provider": "rag"}, headers=headers)
     assert response.status_code == 200, response.text
     result = response.json()["data"]
     assert result["analysis_status"] == "needs_review"
@@ -191,7 +191,7 @@ def test_rejected_generation_can_be_corrected_but_not_exported_before_review(cli
     })
     rejected = client.post(
         f"/api/research/projects/{project_id}/generations",
-        json={"kind": "table", "query": "生成对比表", "document_ids": [baseline["id"]]}, headers=headers,
+        json={"kind": "table", "query": "生成对比表", "document_ids": [baseline["id"]], "provider": "rag"}, headers=headers,
     )
     assert rejected.status_code == 422, rejected.text
     detail = rejected.json()["detail"]
@@ -250,6 +250,9 @@ def test_public_retry_honors_retry_after(monkeypatch):
 
 
 def test_local_generation_processes_are_serialized(monkeypatch):
+    from app.research import local_components
+    if not local_components.component_status()["generative_llm"]["available"]:
+        pytest.skip("local generative model unavailable")
     import threading
     import time
     from concurrent.futures import ThreadPoolExecutor

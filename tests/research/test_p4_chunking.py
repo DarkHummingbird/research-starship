@@ -128,6 +128,9 @@ def test_semantic_chunking_uses_local_similarity_and_no_external_fallback(monkey
 
 @pytest.mark.parametrize("strategy", ["auto", "semantic"])
 def test_parent_recursive_document_recalls_answer_with_real_api(client, auth, tmp_path, monkeypatch, strategy):
+    from app.research.local_components import component_status
+    if strategy == "semantic" and not component_status()["embedding"]["available"]:
+        pytest.skip("local embedding assets unavailable")
     monkeypatch.setenv("RESEARCH_DATA_DIR", str(tmp_path / "research"))
     headers = auth("p4-chunk-recall-user")
     project = client.post("/api/research/projects", json={"name": "父子切块召回"}, headers=headers)

@@ -14,6 +14,13 @@ from app.db import Base as ResearchBase
 from app.data_access.session import make_session_factory
 
 
+class ResearchUserSetting(ResearchBase):
+    __tablename__ = "research_user_settings"
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    local_mode_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class ResearchProject(ResearchBase):
     __tablename__ = "research_projects"
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -24,6 +31,8 @@ class ResearchProject(ResearchBase):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str] = mapped_column(String, nullable=False)
     current_baseline_id: Mapped[str] = mapped_column(String, default="")
+    research_question: Mapped[str] = mapped_column(Text, default="")
+    next_action: Mapped[str] = mapped_column(Text, default="")
 
 
 class ResearchDocument(ResearchBase):
@@ -227,6 +236,7 @@ class ResearchBatchItem(ResearchBase):
     document_id: Mapped[str] = mapped_column(String, nullable=False)
     document_version: Mapped[int] = mapped_column(Integer, default=0)
     operation: Mapped[str] = mapped_column(String, default="analysis")
+    approval_id: Mapped[str] = mapped_column(String, default="")
     status: Mapped[str] = mapped_column(String, nullable=False)
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[str] = mapped_column(String, nullable=False)
@@ -247,6 +257,56 @@ class ResearchAsyncTask(ResearchBase):
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[str] = mapped_column(String, default="")
     completed_at: Mapped[str] = mapped_column(String, default="")
+
+
+class ResearchStateEntry(ResearchBase):
+    __tablename__ = "research_state_entries"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    related_json: Mapped[str] = mapped_column(Text, default="{}")
+    abbreviation: Mapped[str] = mapped_column(String, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    __table_args__ = (
+        CheckConstraint("kind IN ('open_question','evidence_gap','todo','term','review_notice')"),
+        CheckConstraint("status IN ('active','resolved','pending_review','archived')"),
+        Index("idx_research_state_project", "user_id", "project_id", "status"),
+    )
+
+
+class ResearchExperiment(ResearchBase):
+    __tablename__ = "research_experiments"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    hypothesis: Mapped[str] = mapped_column(Text, default="")
+    variables: Mapped[str] = mapped_column(Text, default="")
+    controls: Mapped[str] = mapped_column(Text, default="")
+    data_version: Mapped[str] = mapped_column(String, default="")
+    code_version: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    result: Mapped[str] = mapped_column(Text, default="")
+    result_source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    failure_reason: Mapped[str] = mapped_column(Text, default="")
+    next_step: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    completed_at: Mapped[str] = mapped_column(String, default="")
+    status_before_review: Mapped[str] = mapped_column(String, default="")
+    review_reason: Mapped[str] = mapped_column(Text, default="")
+    __table_args__ = (
+        CheckConstraint("status IN ('idea','in_progress','succeeded','failed','pending_review')"),
+        Index("idx_research_experiments_project", "user_id", "project_id", "status"),
+    )
 
 
 class ResearchOutboundApproval(ResearchBase):
@@ -326,7 +386,7 @@ def notes_dependent_on_source(conn, source):
     notes = conn.execute(select(ResearchDocument).where(
         ResearchDocument.user_id == source.user_id,
         ResearchDocument.project_id == source.project_id,
-        ResearchDocument.document_type == "research_note",
+        ResearchDocument.document_type.in_(("research_note", "baseline")),
         ResearchDocument.status != "deleted",
     )).scalars().all()
     return [note for note in notes if any(
@@ -391,7 +451,7 @@ def init_db() -> None:
         tables = [table for name, table in ResearchBase.metadata.tables.items() if name.startswith("research_")]
         ResearchBase.metadata.create_all(engine, tables=tables)
         additions = {
-            "research_projects": {"current_baseline_id": "VARCHAR DEFAULT ''"},
+            "research_projects": {"current_baseline_id": "VARCHAR DEFAULT ''", "research_question": "TEXT DEFAULT ''", "next_action": "TEXT DEFAULT ''"},
             "research_documents": {
                 "document_type": "VARCHAR DEFAULT 'tutorial'",
                 "processing_status": "VARCHAR DEFAULT 'ready'",
@@ -411,7 +471,9 @@ def init_db() -> None:
                 "fact_json": "TEXT DEFAULT '{}'",
             },
             "research_chunks": {"locator_json": "TEXT DEFAULT '{}'"},
-            "research_batch_items": {"document_version": "INTEGER DEFAULT 0", "operation": "VARCHAR DEFAULT 'analysis'"},
+            "research_batch_items": {"document_version": "INTEGER DEFAULT 0", "operation": "VARCHAR DEFAULT 'analysis'", "approval_id": "VARCHAR DEFAULT ''"},
+            "research_state_entries": {"abbreviation": "VARCHAR DEFAULT ''"},
+            "research_experiments": {"status_before_review": "VARCHAR DEFAULT ''", "review_reason": "TEXT DEFAULT ''"},
         }
         with engine.begin() as connection:
             for table_name, columns in additions.items():
@@ -423,7 +485,10 @@ def init_db() -> None:
 
 
 @contextmanager
-def memory_session(*, commit_on: tuple[type[BaseException], ...] = ()) -> Iterator[Session]:
+def memory_session(existing: Session | None = None, *, commit_on: tuple[type[BaseException], ...] = ()) -> Iterator[Session]:
+    if existing is not None:
+        yield existing
+        return
     init_db()
     with _lock:
         session = SessionLocal()

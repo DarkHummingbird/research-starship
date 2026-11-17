@@ -132,9 +132,32 @@ def _raise_for_status(resp: httpx.Response) -> None:
 
 def _post(spec: ModelSpec, url: str, headers: dict[str, str], body: dict[str, Any], timeout: float) -> dict[str, Any]:
     client = _client(spec.base_url, headers.get("Authorization", "") + headers.get("x-api-key", ""))
-    to = httpx.Timeout(timeout, connect=min(5.0, timeout))
+    to = httpx.Timeout(timeout, connect=min(spec.connect_timeout or 5.0, timeout))
     try:
         resp = client.post(url, json=body, headers=headers, timeout=to)
+    except httpx.TimeoutException as e:
+        raise ProviderError("timeout", type(e).__name__) from e
+    except httpx.TransportError as e:
+        raise ProviderError("connect", type(e).__name__ + ": " + str(e)[:120]) from e
+    _raise_for_status(resp)
+    try:
+        return resp.json()
+    except ValueError as e:
+        raise ProviderError("server", "invalid json body", status=resp.status_code) from e
+
+
+def _post_multipart(
+    spec: ModelSpec,
+    url: str,
+    headers: dict[str, str],
+    data: dict[str, str],
+    files: dict[str, Any],
+    timeout: float,
+) -> dict[str, Any]:
+    client = _client(spec.base_url, headers.get("Authorization", "") + headers.get("x-api-key", ""))
+    to = httpx.Timeout(timeout, connect=min(spec.connect_timeout or 5.0, timeout))
+    try:
+        resp = client.post(url, data=data, files=files, headers=headers, timeout=to)
     except httpx.TimeoutException as e:
         raise ProviderError("timeout", type(e).__name__) from e
     except httpx.TransportError as e:

@@ -47,7 +47,7 @@ def test_ablation_history_archive_and_versioned_export(client, study):
     _, headers, project_id, baseline = study
     response = client.post(
         f"/api/research/projects/{project_id}/generations",
-        json={"kind": "ablation", "query": "比较 KeywordSearch 与 SafeRAG，设计去除证据过滤的消融", "document_ids": [baseline["id"]]},
+        json={"provider": "rag", "kind": "ablation", "query": "比较 KeywordSearch 与 SafeRAG，设计去除证据过滤的消融", "document_ids": [baseline["id"]]},
         headers=headers,
     )
     assert response.status_code == 201, response.text
@@ -99,7 +99,7 @@ def test_latex_without_style_samples_stays_source_bound(client, study):
     _, headers, project_id, baseline = study
     response = client.post(
         f"/api/research/projects/{project_id}/generations",
-        json={"kind": "latex", "query": "写一小段实验设置，不模仿个人风格", "document_ids": [baseline["id"]]},
+        json={"provider": "rag", "kind": "latex", "query": "写一小段实验设置，不模仿个人风格", "document_ids": [baseline["id"]]},
         headers=headers,
     )
     assert response.status_code == 201, response.text
@@ -119,7 +119,7 @@ def test_other_generation_types_use_explicit_categories(client, study, monkeypat
     for kind, category in (("table", "agent_inference"), ("pseudocode", "agent_inference"), ("review", "simulated_review")):
         response = client.post(
             f"/api/research/projects/{project_id}/generations",
-            json={"kind": kind, "query": "处理当前基线", "document_ids": [baseline["id"]]}, headers=headers,
+            json={"provider": "rag", "kind": kind, "query": "处理当前基线", "document_ids": [baseline["id"]]}, headers=headers,
         )
         assert response.status_code == 201, response.text
         assert response.json()["data"]["output_category"] == category

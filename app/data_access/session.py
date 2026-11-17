@@ -32,6 +32,7 @@ _PRIVATE_TABLES = {
     "research_conversations", "research_messages", "research_outbound_approvals", "research_security_events",
     "research_embeddings", "research_generations", "research_conflicts", "research_document_versions",
     "research_changes", "research_batches", "research_batch_items", "research_async_tasks",
+    "research_state_entries", "research_experiments", "research_user_settings",
 }
 
 

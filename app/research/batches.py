@@ -33,7 +33,7 @@ def _public_batch(row, items: list) -> dict[str, Any]:
         item["items"].append(value)
     item["summary"] = {
         status: sum(1 for entry in items if entry.status == status)
-        for status in ("queued", "processing", "cancelling", "pending_review", "failed", "cancelled")
+        for status in ("queued", "processing", "cancelling", "awaiting_approval", "pending_review", "failed", "cancelled")
     }
     return item
 
@@ -57,7 +57,7 @@ def _finish_batch(conn, batch_id: str) -> None:
     items = conn.scalars(select(store.ResearchBatchItem).where(
         store.ResearchBatchItem.batch_id == batch_id
     )).all()
-    if any(item.status in ("queued", "processing", "cancelling") for item in items):
+    if any(item.status in ("queued", "processing", "cancelling", "awaiting_approval") for item in items):
         return
     batch = conn.scalar(select(store.ResearchBatch).where(store.ResearchBatch.id == batch_id))
     batch.status = ("completed_with_errors" if any(item.status == "failed" for item in items)
@@ -66,7 +66,14 @@ def _finish_batch(conn, batch_id: str) -> None:
     batch.completed_at = store.utc_now()
 
 
-def _run_document(user_id: str, document_id: str, expected_version: int = 0, operation: str = "analysis") -> None:
+def _run_document(
+    user_id: str,
+    document_id: str,
+    expected_version: int = 0,
+    operation: str = "analysis",
+    task_id: str = "",
+    approval_id: str = "",
+):
     from app.research.service import ResearchError, get_document
 
     document = get_document(user_id, document_id)
@@ -87,11 +94,19 @@ def _run_document(user_id: str, document_id: str, expected_version: int = 0, ope
     if document["processing_status"] == "needs_ocr":
         from app.research.ocr import ocr_document
 
-        ocr_document(user_id, document_id, expected_version=expected_version or None)
+        return ocr_document(
+            user_id, document_id, expected_version=expected_version or None,
+            provider="external" if operation == "ocr_online" else "local",
+            task_id=task_id, approval_id=approval_id,
+        )
     elif document["document_type"] == "paper" and (operation == "reanalyze" or document["analysis_status"] in ("pending", "failed")):
         from app.research.paper_analysis import analyze_document
 
-        analyze_document(user_id, document_id, expected_version=expected_version or None)
+        return analyze_document(
+            user_id, document_id, expected_version=expected_version or None,
+            provider="rag" if document["confidentiality"] == "L3" else "external",
+            task_id=task_id, approval_id=approval_id,
+        )
 
 
 def _process_item(item_id: str) -> None:
@@ -113,11 +128,12 @@ def _process_item_scoped(item_id: str) -> None:
         batch = conn.execute(select(store.ResearchBatch).where(store.ResearchBatch.id == item.batch_id)).scalar_one()
         batch.status = "processing"
         user_id, document_id, batch_id, version, operation = item.user_id, item.document_id, item.batch_id, item.document_version or 0, item.operation or "analysis"
+        approval_id = item.approval_id or ""
         conn.flush()
     try:
         from app.research.task_control import check_cancelled
         check_cancelled()
-        _run_document(user_id, document_id, version, operation)
+        result = _run_document(user_id, document_id, version, operation, item_id, approval_id)
     except Exception as exc:
         from app.research.task_control import TaskCancelled
         with memory_session() as conn:
@@ -133,8 +149,13 @@ def _process_item_scoped(item_id: str) -> None:
         item = conn.execute(select(store.ResearchBatchItem).where(
             store.ResearchBatchItem.id == item_id
         )).scalar_one()
-        item.status = "pending_review"
-        item.completed_at = store.utc_now()
+        if isinstance(result, dict) and result.get("status") == "awaiting_outbound_approval":
+            item.status = "awaiting_approval"
+            item.approval_id = result["approval"]["id"]
+            item.completed_at = ""
+        else:
+            item.status = "pending_review"
+            item.completed_at = store.utc_now()
         _finish_batch(conn, batch_id)
 
 
@@ -142,7 +163,7 @@ def create_batch(user_id: str, project_id: str, document_ids: list[str], *, oper
     from app.research.service import ResearchError, _document, _project
 
     document_ids = list(dict.fromkeys(document_ids))
-    if operation not in ("analysis", "reanalyze", "reindex"):
+    if operation not in ("analysis", "reanalyze", "reindex", "ocr_online"):
         raise ResearchError(400, "invalid_task_operation", "任务类型无效")
     if not 1 <= len(document_ids) <= 5:
         raise ResearchError(409, "batch_split_required", "单批须为 1–5 篇；超过 5 篇请确认拆批")
@@ -158,9 +179,11 @@ def create_batch(user_id: str, project_id: str, document_ids: list[str], *, oper
         conn.add(batch)
         for document_id in document_ids:
             document = _document(conn, user_id, document_id)
-            allowed = document.status in ("pending", "rejected") if operation in ("analysis", "reanalyze") else document.status != "deleted" and document.processing_status == "ready"
+            allowed = document.status in ("pending", "rejected") if operation in ("analysis", "reanalyze", "ocr_online") else document.status != "deleted" and document.processing_status == "ready"
             if operation == "reanalyze":
                 allowed = allowed and document.document_type == "paper" and document.processing_status == "ready"
+            if operation == "ocr_online":
+                allowed = allowed and document.processing_status == "needs_ocr"
             if document.project_id != project_id or not allowed:
                 raise ResearchError(409, "batch_document_not_pending", "批次只接受当前课题的待处理资料")
             active = conn.execute(select(store.ResearchBatchItem.id).where(
@@ -182,8 +205,9 @@ def create_batch(user_id: str, project_id: str, document_ids: list[str], *, oper
     return get_batch(user_id, batch_id)
 
 
-def retry_batch_item(user_id: str, item_id: str) -> dict[str, Any]:
+def retry_batch_item(user_id: str, item_id: str, *, approval_id: str = "") -> dict[str, Any]:
     from app.research.service import ResearchError, _document
+    from app.research import gateway
 
     with memory_session() as conn:
         item = conn.execute(select(store.ResearchBatchItem).where(
@@ -191,8 +215,14 @@ def retry_batch_item(user_id: str, item_id: str) -> dict[str, Any]:
         )).scalar_one_or_none()
         if item is None:
             raise ResearchError(404, "batch_item_not_found", "批次条目不存在")
-        if item.status != "failed":
-            raise ResearchError(409, "batch_item_not_failed", "只有失败条目允许手动重试")
+        if item.status not in ("failed", "awaiting_approval"):
+            raise ResearchError(409, "batch_item_not_failed", "只有失败或待审批条目允许继续处理")
+        if item.status == "awaiting_approval":
+            if not approval_id or approval_id != item.approval_id:
+                raise ResearchError(409, "approval_scope_changed", "请使用当前任务展示的审批继续分析")
+            gateway.get(user_id, approval_id)
+        else:
+            item.approval_id = ""
         if not item.document_version:
             raise ResearchError(409, "task_version_unknown", "旧任务没有记录资料版本，请重新提交任务")
         if _document(conn, user_id, item.document_id).version != item.document_version:
@@ -242,10 +272,10 @@ def list_batches(user_id: str, project_id: str) -> list[dict[str, Any]]:
 def list_tasks(user_id: str) -> list[dict[str, Any]]:
     with migration_session() as conn:
         active = conn.execute(select(store.ResearchBatch).where(
-            store.ResearchBatch.user_id == user_id, store.ResearchBatch.status.in_(("queued", "processing"))
+            store.ResearchBatch.user_id == user_id, store.ResearchBatch.status.in_(("queued", "processing", "awaiting_approval"))
         ).order_by(store.ResearchBatch.created_at.desc())).scalars().all()
         recent = conn.execute(select(store.ResearchBatch).where(
-            store.ResearchBatch.user_id == user_id, store.ResearchBatch.status.not_in(("queued", "processing"))
+            store.ResearchBatch.user_id == user_id, store.ResearchBatch.status.not_in(("queued", "processing", "awaiting_approval"))
         ).order_by(store.ResearchBatch.created_at.desc()).limit(100)).scalars().all()
         batches = [*active, *recent]
         output = []

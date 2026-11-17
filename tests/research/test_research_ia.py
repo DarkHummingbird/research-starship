@@ -33,13 +33,13 @@ class ResearchPageParser(HTMLParser):
             self.in_generation_select = False
 
 
-def test_research_page_has_four_task_workspaces():
+def test_research_page_has_home_and_four_task_workspaces():
     html = (ROOT / "static/research.html").read_text(encoding="utf-8")
     parser = ResearchPageParser()
     parser.feed(html)
 
-    assert parser.views == ["library", "review", "chat", "data"]
-    assert parser.nav_targets == ["library", "review", "chat", "data"]
+    assert parser.views == ["home", "library", "review", "chat", "data"]
+    assert parser.nav_targets == ["home", "library", "review", "chat", "data"]
     assert len(parser.ids) == len(set(parser.ids))
     assert "latex" not in parser.generation_options
     assert "恢复完整备份" not in html
@@ -47,7 +47,7 @@ def test_research_page_has_four_task_workspaces():
     assert "不提供整库恢复" in html
     assert "创建完整备份" not in html
     assert "exportLibrary" not in html
-    assert "使用同一产品的助手功能" in html
+    assert "离开科研工作区，打开助手" in html
     assert "诊断与原始输出" in html
     for internal_term in ("P4", "Personal Agent", "本地 RAG"):
         assert internal_term not in html

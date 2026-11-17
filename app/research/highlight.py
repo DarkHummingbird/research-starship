@@ -48,7 +48,7 @@ def page_rectangles(page: Any, quote: str, locator: dict[str, Any]) -> list[Any]
             else:
                 result[-1] |= rect
         return result
-    if locator.get("extraction") != "offline_ocr":
+    if locator.get("extraction") not in ("offline_ocr", "deepseek_ocr"):
         return []
     lines = locator.get("ocr_lines")
     if not isinstance(lines, list):

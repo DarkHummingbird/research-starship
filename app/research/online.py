@@ -19,27 +19,34 @@ def embed_texts(spec: ModelSpec, texts: list[str], *, timeout: float = 120) -> d
     api_key = spec.api_key()
     if not api_key:
         raise providers.ProviderError("no_key", "research embedding is not configured")
-    data = providers._post(
-        spec,
-        spec.base_url.rstrip("/") + "/embeddings",
-        {"Authorization": f"Bearer {api_key}"},
-        {**spec.params, "model": spec.model, "input": texts, "encoding_format": "float"},
-        min(timeout, spec.timeout or timeout),
-    )
+    batch_size = 20 if spec.vendor == "qwen" else len(texts)
+    vectors = []
+    for start in range(0, len(texts), batch_size):
+        batch = texts[start:start + batch_size]
+        data = providers._post(
+            spec,
+            spec.base_url.rstrip("/") + "/embeddings",
+            {"Authorization": f"Bearer {api_key}"},
+            {**spec.params, "model": spec.model, "input": batch, "encoding_format": "float"},
+            min(timeout, spec.timeout or timeout),
+        )
+        try:
+            rows = data["data"]
+            if len(rows) != len(batch):
+                raise ValueError("embedding count mismatch")
+            ordered = sorted(rows, key=lambda row: row["index"])
+            vectors.extend(row["embedding"] for row in ordered)
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise providers.ProviderError("server", "invalid research embedding response") from exc
     try:
-        rows = data["data"]
-        if len(rows) != len(texts):
-            raise ValueError("embedding count mismatch")
-        ordered = sorted(rows, key=lambda row: row["index"])
-        vectors = [row["embedding"] for row in ordered]
-        if not vectors or any(not isinstance(vector, list) or not vector for vector in vectors):
+        if len(vectors) != len(texts) or any(not isinstance(vector, list) or not vector for vector in vectors):
             raise ValueError("invalid embeddings")
-        dimensions = len(vectors[0])
+        dimensions = len(vectors[0]) if vectors else 0
         if any(len(vector) != dimensions for vector in vectors):
             raise ValueError("embedding dimensions mismatch")
         if any(type(value) not in (int, float) or not math.isfinite(value) for vector in vectors for value in vector):
             raise ValueError("embedding values must be finite")
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
+    except (IndexError, TypeError, ValueError) as exc:
         raise providers.ProviderError("server", "invalid research embedding response") from exc
     return {"vectors": vectors, "model": spec.model, "dimensions": dimensions, "network": "online"}
 
@@ -50,7 +57,7 @@ def rerank(spec: ModelSpec, query: str, documents: list[str], *, timeout: float 
         raise providers.ProviderError("no_key", "research rerank is not configured")
     data = providers._post(
         spec,
-        spec.base_url.rstrip("/") + "/rerank",
+        spec.base_url.rstrip("/") + ("/reranks" if spec.vendor == "qwen" else "/rerank"),
         {"Authorization": f"Bearer {api_key}"},
         {**spec.params, "model": spec.model, "query": query, "documents": documents,
          "top_n": len(documents), "return_documents": False},

@@ -57,12 +57,12 @@ const get = (id) => {
   if (!nodes.has(id)) nodes.set(id, new Node('div', id));
   return nodes.get(id);
 };
-const views = ['library', 'review', 'chat', 'data'].map((name) => {
+const views = ['home', 'library', 'review', 'chat', 'data'].map((name) => {
   const node = get(`${name}View`);
   node.dataset.view = name;
   return node;
 });
-const navButtons = ['library', 'review', 'chat', 'data'].map((name) => {
+const navButtons = ['home', 'library', 'review', 'chat', 'data'].map((name) => {
   const node = new Node('button');
   node.dataset.viewTarget = name;
   return node;
@@ -79,6 +79,7 @@ const taskCenter = new Node("details");
 const taskStatus = new Node('div');
 taskStatus.append(get('taskCount'));
 const document = {
+  body: new Node('body'),
   getElementById: get,
   createElement: (tag) => new Node(tag),
   createTextNode: (text) => ({text}),
@@ -103,11 +104,19 @@ const responses = {
   '/api/session': {},
   '/api/research/projects': {items: []},
   '/api/research/tasks': {items: []},
-  '/api/research/capabilities': {external_models: [{id: 'qwen-plus', provider: 'qwen', configured: true}]},
+  '/api/research/capabilities': {
+    external_models: [{id: 'qwen-plus', provider: 'qwen', configured: true}],
+    local_mode: {enabled: false, l3_available: false, local_generation_available: false, semantic_chunking_available: false},
+  },
 };
+const storage = new Map();
 const context = vm.createContext({
   document,
   window,
+  sessionStorage: {
+    getItem: key => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+  },
   FormData: class {},
   fetch: async (path) => {
     assert.ok(Object.hasOwn(responses, path), `Unexpected API request: ${path}`);
@@ -121,15 +130,32 @@ await new Promise((resolve) => setImmediate(resolve));
 assert.equal(vm.runInContext('citationExcerpt("Method: A retrieval method.\\nAccuracy: 87.4 percent.", "论文准确率是多少？")', context), 'Accuracy: 87.4 percent.');
 assert.equal(vm.runInContext('citationExcerpt("BERT introductory title\\nMore about BERT model\\nincluding the GLUE score to\\n80.5% improvement", "BERT的GLUE得分是多少？")', context), 'including the GLUE score to\n80.5% improvement');
 
-assert.equal(get('libraryView').hidden, false);
+vm.runInContext(`
+  addMessage('assistant', '测试回答', [
+    {title: '论文A', chapter: 'Method', version: 1, confidentiality: 'L1', quote: '证据句'},
+    {title: '论文B', chapter: 'Results', version: 2, confidentiality: 'L2', quote: '第二句'},
+  ], 'external:deepseek-flash');
+`, context);
+const answerArticle = get('chatLog').children[0];
+const channelMeta = answerArticle.children.find(child => child.tagName === 'small');
+assert.match(channelMeta.textContent, /在线生成：deepseek-flash/);
+const sourceCards = answerArticle.children.filter(child => child.className === 'source-card');
+assert.equal(sourceCards.length, 2);
+assert.equal(sourceCards[0].open, true);
+assert.notEqual(sourceCards[1].open, true);
+
+assert.equal(get('homeView').hidden, false);
+assert.equal(get('libraryView').hidden, true);
 assert.equal(get('reviewView').hidden, true);
 assert.equal(navButtons[0].getAttribute('aria-current'), 'page');
+assert.equal(get('localModeEnabled').checked, false);
+assert.match(get('localModeStatus').textContent, /默认关闭/);
 
 await vm.runInContext('switchView("review")', context);
 assert.equal(get('libraryView').hidden, true);
 assert.equal(get('reviewView').hidden, false);
 assert.equal(get('documentPreview').parentElement, get('reviewPreviewMount'));
-assert.equal(navButtons[1].getAttribute('aria-current'), 'page');
+assert.equal(navButtons[2].getAttribute('aria-current'), 'page');
 assert.equal(navButtons[0].getAttribute('aria-current'), null);
 
 vm.runInContext(`
@@ -190,6 +216,10 @@ assert.equal(detailsNode.open, true);
 assert.equal(get('arxivCandidates').children.length, 1);
 assert.equal(document.activeElement, get('arxivCandidates'));
 assert.equal(get('provider').value, 'external');
+responses['/api/research/capabilities'].local_mode = {
+  enabled: true, l3_available: true, local_generation_available: true, semantic_chunking_available: true,
+};
+await vm.runInContext('loadCapabilities()', context);
 get('queryLevel').value = 'L3';
 await get('queryLevel').fire('change');
 assert.equal(get('provider').value, 'rag');
@@ -221,3 +251,16 @@ vm.runInContext("state.projectId = 'p'; state.view = 'library'; state.watchingTa
 await vm.runInContext('refreshTasks()', context);
 assert.equal(vm.runInContext('state.documents[0].id', context), 'doc-new');
 assert.equal(get('pendingNavCount').textContent, '1');
+
+responses['/api/research/projects'] = {items: [
+  {id: 'p', name: '当前标签页课题', document_count: 1, memory_count: 0},
+  {id: 'q', name: '另一课题', document_count: 0, memory_count: 0},
+]};
+storage.set('researchProjectId', 'p');
+vm.runInContext("state.projectId = 'q'", context);
+await vm.runInContext('refreshProjects()', context);
+assert.equal(vm.runInContext('state.projectId', context), 'p');
+storage.set('researchProjectId', 'another-account-project');
+vm.runInContext("state.projectId = 'q'", context);
+await vm.runInContext('refreshProjects()', context);
+assert.equal(vm.runInContext('state.projectId', context), 'q');

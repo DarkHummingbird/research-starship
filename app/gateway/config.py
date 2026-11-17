@@ -55,6 +55,7 @@ class ModelSpec:
     price_output: Optional[float] = None
     currency: str = "CNY"
     timeout: Optional[float] = None
+    connect_timeout: Optional[float] = None
     max_tokens: Optional[int] = None
     params: dict[str, Any] = field(default_factory=dict, hash=False, compare=False)
     # Upstream account bucket shared by models on the same key (Kimi k2.6 + k3).
@@ -298,6 +299,7 @@ def _parse_model(mid: str, raw: dict[str, Any], providers: dict[str, dict[str, A
         price_output=_float_or_none(price.get("output", merged.get("price_output"))),
         currency=str(price.get("currency") or merged.get("currency") or "CNY"),
         timeout=_float_or_none(merged.get("timeout")),
+        connect_timeout=_float_or_none(merged.get("connect_timeout")),
         max_tokens=_int_or_none(merged.get("max_tokens")),
         params=dict(merged.get("params") or {}),
         limit_group=str(merged.get("limit_group") or prov_name or ""),

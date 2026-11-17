@@ -22,7 +22,7 @@ def research_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def user(auth):
+def user(auth, research_dir):
     from app.data_access import user_scope
 
     uid = "research-p1-user"

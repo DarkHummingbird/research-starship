@@ -39,6 +39,15 @@ def make_row(model, owner):
         if column.key == "media_kind":
             values[column.key] = "document"
             continue
+        if column.key == "kind" and model.__tablename__ == "research_state_entries":
+            values[column.key] = "open_question"
+            continue
+        if column.key == "status" and model.__tablename__ == "research_state_entries":
+            values[column.key] = "active"
+            continue
+        if column.key == "status" and model.__tablename__ == "research_experiments":
+            values[column.key] = "idea"
+            continue
         kind = column.type.python_type
         values[column.key] = (uuid.uuid4().hex if kind is str else
                               datetime.now(timezone.utc) if kind is datetime else

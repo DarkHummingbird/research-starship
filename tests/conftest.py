@@ -223,11 +223,15 @@ def _drain_background_summaries(monkeypatch):
 
 @pytest.fixture
 def auth(monkeypatch):
-    """Enable AUTH_SECRET and return a header factory for a user."""
+    """Return user headers with legacy local-model scenarios explicitly enabled."""
     monkeypatch.setenv("AUTH_SECRET", "test-secret")
     from app.auth import mint_user_token
+    from app.data_access import user_scope
+    from app.research.local_mode import set_enabled
 
     def _headers(user_id: str, ttl: int | None = None) -> dict[str, str]:
+        with user_scope(user_id):
+            set_enabled(user_id, True)
         return {"Authorization": f"Bearer {mint_user_token(user_id, ttl)}"}
 
     return _headers

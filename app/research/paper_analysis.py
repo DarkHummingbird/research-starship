@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
@@ -120,6 +121,8 @@ def _json_output(text: str) -> Any:
     try:
         return json.loads(stripped[start:end + 1])
     except ValueError as exc:
+        if stripped.count("{") > stripped.count("}"):
+            raise PaperValidationError("模型输出在 JSON 闭合前被截断；已保留原始输出，请重试或检查模型输出长度限制") from exc
         raise PaperValidationError("模型返回的 JSON 无法解析") from exc
 
 
@@ -184,10 +187,24 @@ def normalize_evidence_sources(payload: Any, chunks: list[dict[str, Any]]) -> An
     return payload
 
 
-def analyze_document(user_id: str, document_id: str, *, expected_version: int | None = None) -> dict[str, Any]:
+def analyze_document(
+    user_id: str,
+    document_id: str,
+    *,
+    expected_version: int | None = None,
+    provider: str = "external",
+    model_id: str = "",
+    task_id: str = "",
+    approval_id: str = "",
+) -> dict[str, Any]:
     from app.research.service import ResearchError, _document
     from app.research.task_control import check_cancelled
+    from app.research.local_mode import require_enabled
 
+    if provider not in ("external", "rag"):
+        raise ResearchError(400, "invalid_provider", "论文分析通道必须为在线或本地生成")
+    if provider == "rag":
+        require_enabled(user_id)
     with migration_session() as conn:
         row = _document(conn, user_id, document_id)
         if expected_version is not None and row.version != expected_version:
@@ -198,6 +215,10 @@ def analyze_document(user_id: str, document_id: str, *, expected_version: int | 
             raise ResearchError(409, "approved_analysis_readonly", "已确认分析不能直接覆盖，请创建新版本")
         if row.processing_status != "ready":
             raise ResearchError(409, "document_processing_incomplete", "请先完成文档解析和 OCR")
+        if row.confidentiality == "L3" and provider == "external":
+            from app.research import gateway
+
+            raise gateway.PolicyError(403, "l3_external_forbidden", "L3 论文不能连接在线模型；请开启本地保密模式并选择本地生成")
         chunks = [store.model_dict(chunk) for chunk in conn.execute(select(store.ResearchChunk).where(
             store.ResearchChunk.document_id == document_id,
             store.ResearchChunk.document_version == row.version,
@@ -228,7 +249,24 @@ def analyze_document(user_id: str, document_id: str, *, expected_version: int | 
         "不得把预期实验写成已完成，不得补造指标。\n\n" + "\n\n".join(context_parts)
     )
     try:
-        generated = generate(prompt, max_tokens=2600, timeout=240)
+        if provider == "rag":
+            generated = generate(prompt, max_tokens=6000, timeout=240)
+        else:
+            from app.research.online_generation import generate_online
+
+            fragments = [{
+                "document_id": document_id, "version": version, "chunk_id": chunk["id"],
+                "chapter": chunk["chapter"], "snippet": chunk["content"], "classification": row.confidentiality,
+                "sha256": hashlib.sha256(chunk["content"].encode("utf-8")).hexdigest(),
+            } for chunk in selected]
+            online = generate_online(
+                user_id, row.project_id, model_id=model_id, task_id=task_id,
+                approval_id=approval_id, purpose="论文结构化分析", operation="summary",
+                prompt=prompt, fragments=fragments, max_tokens=6000,
+            )
+            if online["status"] == "awaiting_outbound_approval":
+                return {**online, "document_id": document_id, "analysis_status": "awaiting_approval"}
+            generated = {"text": online["content"], "model": online["model"]}
         payload = normalize_evidence_sources(normalize_analysis(_json_output(generated["text"])), chunks)
         payload, quarantined = quarantine_invalid_facts(payload, chunks)
     except (LocalComponentError, PaperValidationError) as exc:

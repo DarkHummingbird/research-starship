@@ -113,6 +113,8 @@ def test_scanned_pdf_manual_offline_ocr_and_review_gate(client, user):
     assert result["ocr_pages"] == [1]
     assert result["version"] == 2
     assert result["processing_status"] == "ready"
+    assert result["status"] == "pending"
+    assert result["analysis_status"] == "pending"
     assert result["embedding_status"] == "ready"
     assert "Research agent" in result["source_text"]
     assert "87.4%" in result["source_text"]

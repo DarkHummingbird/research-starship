@@ -185,8 +185,10 @@ def _normalize_image(content: bytes, suffix: str, destination: Path) -> tuple[st
     return "image/png", len(normalized)
 
 
-def _embedding(chunks: list[dict[str, Any]]) -> str:
-    if not chunks or not component_status()["embedding"]["available"]:
+def _embedding(user_id: str, chunks: list[dict[str, Any]]) -> str:
+    from app.research.local_mode import is_enabled
+
+    if not chunks or not is_enabled(user_id) or not component_status()["embedding"]["available"]:
         return ""
     try:
         output = embed_texts([item["content"] for item in chunks], timeout=180)
@@ -209,9 +211,15 @@ def create_attachment(
         raise AttachmentError(400, "invalid_confidentiality", "保密等级必须为 L1、L2 或 L3")
     if confidentiality == "L3" and allow_outbound:
         raise AttachmentError(409, "l3_outbound_forbidden", "保密附件不能发送到在线服务；请选择仅本机处理")
+    from app.research.local_mode import MESSAGE, is_enabled
+
+    if confidentiality == "L3" and not is_enabled(user_id):
+        raise AttachmentError(403, "local_mode_disabled", MESSAGE)
     safe_name = Path(filename or "").name.strip()[:160]
     suffix = Path(safe_name).suffix.lower()
     is_image = suffix in IMAGE_SUFFIXES
+    if is_image and not allow_outbound and not is_enabled(user_id):
+        raise AttachmentError(403, "local_mode_disabled", MESSAGE)
     if not safe_name or (not is_image and suffix not in DOCUMENT_SUFFIXES):
         raise AttachmentError(422, "unsupported_attachment", "当前支持 JPG、PNG、WebP、PDF、DOCX 和 Markdown")
     maximum = MAX_IMAGE_BYTES if is_image else MAX_DOCUMENT_BYTES
@@ -271,7 +279,7 @@ def create_attachment(
                     row.processing_mode = "local_text"
             else:
                 row.processing_mode = "local_text"
-        row.embedding_model = _embedding(chunks)
+        row.embedding_model = _embedding(user_id, chunks)
         row.chunks_json = json.dumps(chunks, ensure_ascii=False)
         row.status = "ready"
     except (ValueError, LocalComponentError, AttachmentError) as exc:
@@ -308,7 +316,8 @@ def validate_attachment(user_id: str, attachment_id: str, thread_id: str) -> dic
     return public_attachment(row)
 
 
-def _context(row: ChatAttachment, message: str) -> str:
+def _context(user_id: str, row: ChatAttachment, message: str) -> str:
+    from app.research.local_mode import is_enabled
     from app.research.service import _bm25_context, _bm25_score, _term_counts, _term_tokens
 
     chunks = _json(row.chunks_json, [])
@@ -320,7 +329,7 @@ def _context(row: ChatAttachment, message: str) -> str:
     lexical = [_bm25_score(query_terms, item, frequency, average, len(chunks)) for item in counts]
     maximum = max(lexical, default=0.0)
     vectors = []
-    if row.embedding_model and component_status()["embedding"]["available"] and all(item.get("vector") for item in chunks):
+    if is_enabled(user_id) and row.embedding_model and component_status()["embedding"]["available"] and all(item.get("vector") for item in chunks):
         try:
             query_vector = embed_texts([message])["vectors"][0]
             vectors = [sum(q * float(v) for q, v in zip(query_vector, item["vector"], strict=False)) for item in chunks]
@@ -362,9 +371,13 @@ def generate_attachment_reply(user_id: str, attachment_id: str, *, thread_id: st
     if row.media_kind == "image" and row.processing_mode == "local_ocr":
         rules += "该图片仅经过本地 OCR 文字识别，未进行视觉语义理解，不要声称看到了颜色、布局或图形关系。"
     if spec is None:
+        from app.research.local_mode import MESSAGE, is_enabled
+
+        if not is_enabled(user_id):
+            raise AttachmentError(403, "local_mode_disabled", MESSAGE)
         if not component_status()["generative_llm"]["available"]:
             raise AttachmentError(503, "local_model_unavailable", "本地生成模型不可用，附件未发送到在线服务")
-        context = _context(row, message)
+        context = _context(user_id, row, message)
         result = generate(system + rules + f"\n\n{context}\n\n用户问题：{message}", max_tokens=1000, timeout=240)
         return re.sub(r"\s*\[end of text\]\s*$", "", result["text"], flags=re.I).strip()
     spec = replace(spec, params={**spec.params, **({"thinking": {"type": "disabled"}} if spec.vendor == "deepseek" else {})})
@@ -386,7 +399,7 @@ def generate_attachment_reply(user_id: str, attachment_id: str, *, thread_id: st
         if not content:
             raise AttachmentError(502, "attachment_model_empty", "图片理解没有返回内容，未自动重试")
         return content
-    context = _context(row, message)
+    context = _context(user_id, row, message)
     result = providers.call(
         spec, api_key=spec.api_key(), system=system + rules,
         user=f"{context}\n\n用户问题：{message}", tier="fast",

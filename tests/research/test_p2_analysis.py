@@ -8,9 +8,12 @@ from app.research.local_components import component_status
 
 
 @pytest.fixture
-def paper(client, auth, tmp_path, monkeypatch):
+def paper(client, auth, tmp_path, monkeypatch, request):
     from app.data_access import user_scope
 
+    callspec = getattr(request.node, "callspec", None)
+    if callspec and callspec.params.get("real_embedding") and not component_status()["embedding"]["available"]:
+        pytest.skip("local embedding assets unavailable")
     monkeypatch.setenv("RESEARCH_DATA_DIR", str(tmp_path / "research"))
     uid = "p2-analysis-user"
     headers = auth(uid)
@@ -44,7 +47,7 @@ def test_l3_paper_analysis_review_and_memory(client, paper):
     if not component_status()["generative_llm"]["available"]:
         pytest.skip("local generative model unavailable")
     _, headers, project_id, document = paper
-    response = client.post(f"/api/research/documents/{document['id']}/analysis", headers=headers)
+    response = client.post(f"/api/research/documents/{document['id']}/analysis", json={"provider": "rag"}, headers=headers)
     assert response.status_code == 200, response.text
     result = response.json()["data"]
     assert result["analysis_status"] == "ready"

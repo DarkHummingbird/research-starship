@@ -49,7 +49,7 @@ def test_five_items_two_workers_one_failure_and_manual_retry(client, batch_proje
     lock=threading.Lock()
     original=batches._run_document
 
-    def controlled(uid,document_id,version=0,operation="analysis"):
+    def controlled(uid,document_id,version=0,operation="analysis",task_id="",approval_id=""):
         nonlocal active,maximum
         with lock:
             active+=1

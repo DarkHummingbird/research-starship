@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from app.data_access.research import memory_session
 from app.research import gateway, store
@@ -24,11 +25,19 @@ def import_document(
     document_type: str | None = None,
     source_uri: str = "",
     chunking_strategy: str = "auto",
+    conn: Session | None = None,
+    index: bool = True,
 ) -> dict[str, Any]:
     from app.research.service import ResearchError, _project
 
     if confidentiality not in gateway.LEVELS:
         raise ResearchError(400, "invalid_confidentiality", "保密等级必须为 L1、L2 或 L3")
+    from app.research import local_mode
+
+    if confidentiality == "L3":
+        local_mode.require_l3(user_id)
+    if chunking_strategy == "semantic":
+        local_mode.require_enabled(user_id)
     safe_name = Path(filename or "").name
     if not safe_name:
         raise ResearchError(400, "invalid_filename", "文件名不能为空")
@@ -51,9 +60,9 @@ def import_document(
     directory = store.data_dir() / "files" / owner_dir
     directory.mkdir(parents=True, exist_ok=True)
     stored_path = directory / f"{document_id}-v1-{safe_name}"
-    with memory_session() as conn:
-        _project(conn, user_id, project_id)
-        duplicate = conn.execute(select(store.ResearchDocument).where(
+    with memory_session(conn) as session:
+        _project(session, user_id, project_id)
+        duplicate = session.execute(select(store.ResearchDocument).where(
             store.ResearchDocument.user_id == user_id,
             store.ResearchDocument.project_id == project_id,
             store.ResearchDocument.sha256 == digest,
@@ -69,16 +78,16 @@ def import_document(
             analysis_json="{}", analysis_raw_json="", processing_error="\n".join(parsed.warnings), source_uri=source_uri,
             extraction_model="",
         )
-        conn.add(row)
-        conn.flush()
+        session.add(row)
+        session.flush()
         for chunk in parsed.chunks:
-            conn.add(store.ResearchChunk(
+            session.add(store.ResearchChunk(
                 id=chunk["id"], user_id=user_id, project_id=project_id, document_id=document_id,
                 document_version=1, ordinal=chunk["ordinal"], chapter=chunk["chapter"],
                 content=chunk["content"], confidentiality=confidentiality,
                 locator_json=json.dumps(chunk.get("locator_json") or {}, ensure_ascii=False),
             ))
-        conn.flush()
+        session.flush()
         result = store.public_document(row, include_text=True)
         result["sources"] = [{
             "id": chunk["id"], "document_version": 1, "ordinal": chunk["ordinal"],
@@ -90,12 +99,13 @@ def import_document(
             result["duplicate_of"] = {
                 "id": duplicate.id, "title": duplicate.title, "version": duplicate.version, "status": duplicate.status,
             }
-    embedding_result = index_document(user_id, document_id)
-    result["embedding_status"] = embedding_result["embedding_status"]
-    if embedding_result.get("approval"):
-        result["approval"] = embedding_result["approval"]
-    if embedding_result.get("processing_error"):
-        result["processing_error"] = embedding_result["processing_error"]
+    if index:
+        embedding_result = index_document(user_id, document_id)
+        result["embedding_status"] = embedding_result["embedding_status"]
+        if embedding_result.get("approval"):
+            result["approval"] = embedding_result["approval"]
+        if embedding_result.get("processing_error"):
+            result["processing_error"] = embedding_result["processing_error"]
     return result
 
 
@@ -152,6 +162,10 @@ def index_document(
             return {"embedding_status": "missing"}
         if expected_version is not None and row.version != expected_version:
             return {"embedding_status": "stale", "processing_error": "资料版本已变化"}
+        from app.research import local_mode
+
+        if row.confidentiality == "L3" and not local_mode.is_enabled(user_id):
+            return {"embedding_status": "paused", "processing_error": local_mode.MESSAGE}
         chunks = conn.execute(select(store.ResearchChunk).where(
             store.ResearchChunk.document_id == document_id,
             store.ResearchChunk.document_version == row.version,
@@ -176,10 +190,13 @@ def index_document(
                 conn.flush()
             return output
         if output is None:
-            try:
-                output = embed_texts(contents)
-            except LocalComponentError as exc:
-                failure = exc.message or "本地向量化失败"
+            if not local_mode.is_enabled(user_id):
+                failure = "在线向量索引未配置，本地保密模式未开启；保留词语检索"
+            else:
+                try:
+                    output = embed_texts(contents)
+                except LocalComponentError as exc:
+                    failure = exc.message or "本地向量化失败"
     check_cancelled()
     with memory_session() as conn:
         row = conn.execute(select(store.ResearchDocument).where(

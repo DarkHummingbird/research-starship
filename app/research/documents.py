@@ -107,9 +107,9 @@ def _pdf(content: bytes, document_id: str, title: str, confidentiality: str, chu
             chapter = f"第 {page_number} 页" + (f"（片段 {index}）" if index > 1 else "")
             sections.append((chapter, part, {"page": page_number, "part": index, "extraction": "pdf_text"}))
             source_parts.append(f"[{chapter}]\n{part}")
-    warnings = [f"第 {','.join(map(str, empty_pages))} 页没有可提取文本，需手动执行本地 OCR"] if empty_pages else []
+    warnings = [f"第 {','.join(map(str, empty_pages))} 页没有可提取文本，需手动执行 DeepSeek 在线 OCR 或本地 OCR"] if empty_pages else []
     if not sections:
-        placeholder = "扫描页尚未执行本地 OCR，当前没有可核验正文。"
+        placeholder = "扫描页尚未执行 OCR，当前没有可核验正文。"
         sections = [("待 OCR", placeholder, {"extraction": "pending_ocr"})]
         source_parts = [placeholder]
     status = "needs_ocr" if empty_pages else "ready"

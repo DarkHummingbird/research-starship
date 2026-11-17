@@ -31,6 +31,20 @@ class DocumentUpdateBody(BaseModel):
     confidentiality: Literal["L1", "L2", "L3"] | None = None
 
 
+class AnalysisRequestBody(BaseModel):
+    provider: Literal["external", "rag"] = "external"
+    model_id: str = ""
+    task_id: str = ""
+    approval_id: str = ""
+
+
+class OcrRequestBody(BaseModel):
+    provider: Literal["local", "external"] = "local"
+    expected_version: int | None = Field(default=None, ge=1)
+    task_id: str = ""
+    approval_id: str = ""
+
+
 class AnalysisUpdateBody(BaseModel):
     expected_version: int = Field(ge=1)
     analysis: dict[str, Any]
@@ -47,6 +61,20 @@ class ConversationBody(BaseModel):
     title: str = "新会话"
 
 
+class LocalModeBody(BaseModel):
+    enabled: bool
+
+
+class CitationVerificationBody(BaseModel):
+    doi: str = ""
+    title: str = ""
+    author: str = ""
+    year: int | None = None
+    confidentiality: Literal["L1", "L2", "L3"] = "L1"
+    task_id: str = ""
+    approval_id: str = ""
+
+
 class ChatBody(BaseModel):
     message: str
     conversation_id: str | None = None
@@ -56,6 +84,9 @@ class ChatBody(BaseModel):
     query_confidentiality: Literal["L1", "L2", "L3"] = "L1"
     task_id: str = ""
     approval_id: str = ""
+    query_plan: dict[str, Any] | None = None
+    selected_document_ids: list[str] = Field(default_factory=list, max_length=5)
+    allow_all_documents: bool = False
 
 
 class OutboundPrepareBody(BaseModel):
@@ -97,10 +128,18 @@ class WebpageImportBody(SourceRequest):
     url: str
 
 
+class BatchRetryBody(BaseModel):
+    approval_id: str = ""
+
+
 class GenerationBody(BaseModel):
     kind: Literal["compare", "ablation", "table", "pseudocode", "review", "latex"]
     query: str = ""
     document_ids: list[str] = Field(default_factory=list, max_length=10)
+    provider: Literal["external", "rag"] = "external"
+    model_id: str = ""
+    task_id: str = ""
+    approval_id: str = ""
 
 
 class GenerationUpdateBody(BaseModel):
@@ -143,7 +182,7 @@ class ConflictResolutionBody(BaseModel):
 class BatchBody(BaseModel):
     document_ids: list[str] = Field(min_length=1, max_length=20)
     reanalyze: bool = False
-    operation: Literal["analysis", "reanalyze", "reindex"] = "analysis"
+    operation: Literal["analysis", "reanalyze", "reindex", "ocr_online"] = "analysis"
 
 
 class ConfirmActionBody(BaseModel):
@@ -170,6 +209,61 @@ class IndexDocumentBody(BaseModel):
     approval_id: str = ""
 
 
+class ProjectStateBody(BaseModel):
+    research_question: str | None = None
+    next_action: str | None = None
+    expected_updated_at: str
+
+
+class StateEntryBody(BaseModel):
+    kind: Literal["open_question", "evidence_gap", "todo", "term"]
+    content: str
+    definition: str = ""
+    abbreviation: str = ""
+    source_refs: list[NoteSourceBody] = Field(default_factory=list, max_length=20)
+
+
+class StateEntryUpdateBody(BaseModel):
+    expected_version: int = Field(ge=1)
+    content: str | None = None
+    definition: str | None = None
+    abbreviation: str | None = None
+    status: Literal["active", "resolved", "pending_review", "archived"] | None = None
+    source_refs: list[NoteSourceBody] | None = None
+
+
+class ExperimentBody(BaseModel):
+    title: str
+    hypothesis: str = ""
+    variables: str = ""
+    controls: str = ""
+    data_version: str = ""
+    code_version: str = ""
+    result: str = ""
+    failure_reason: str = ""
+    next_step: str = ""
+
+
+class ExperimentUpdateBody(BaseModel):
+    expected_version: int = Field(ge=1)
+    status: Literal["idea", "in_progress", "succeeded", "failed", "pending_review"] | None = None
+    fields: dict[str, Any] = Field(default_factory=dict)
+    result_source_refs: list[NoteSourceBody] | None = None
+
+
+class SynthesisBody(BaseModel):
+    document_ids: list[str] = Field(min_length=2, max_length=5)
+    query: str = ""
+    provider: Literal["structured", "external"] = "structured"
+    model_id: str = ""
+    task_id: str = ""
+    approval_id: str = ""
+
+
+class SaveSynthesisBody(BaseModel):
+    title: str = "跨文献综合笔记"
+
+
 def _data(data: Any, status: str = "ok", http_status: int = 200) -> JSONResponse:
     return JSONResponse({"ok": True, "status": status, "data": data}, status_code=http_status)
 
@@ -191,6 +285,7 @@ async def policy_error_handler(_request, exc: gateway.PolicyError) -> JSONRespon
 @router.get("/capabilities")
 def capabilities(uid: str = Depends(require_user)):
     from app.gateway.config import get_config
+    from app.research import local_mode
 
     models = [{
         "id": spec.id, "provider": spec.vendor, "base_url": spec.base_url, "configured": spec.has_key(),
@@ -200,8 +295,18 @@ def capabilities(uid: str = Depends(require_user)):
     from app.research.local_components import component_status
     from app.research.online import embedding_spec, rerank_spec
 
+    from app.research.online_ocr import ocr_spec
+
     embedding = embedding_spec()
     rerank = rerank_spec()
+    for model in models:
+        if model["id"] in {embedding.id, embedding.model}:
+            model["kind"] = "embedding"
+        elif model["id"] in {rerank.id, rerank.model}:
+            model["kind"] = "rerank"
+        else:
+            model["kind"] = "chat"
+    ocr = ocr_spec()
     components = component_status()
     with migration_session() as conn:
         existing_models = list(conn.execute(select(store.ResearchEmbedding.model).where(
@@ -212,11 +317,13 @@ def capabilities(uid: str = Depends(require_user)):
         "mode": "research-v1.4",
         "preferred_channel": "online_api",
         "local_required_for": ["L3"],
+        "local_mode": local_mode.status(uid),
         "provider_configuration": "after_install",
         "online_services": {
             "generation": {"configured": any(model["configured"] for model in models)},
             "embedding": {"configured": embedding.has_key(), "model": embedding.model, "provider": embedding.vendor},
             "rerank": {"configured": rerank.has_key(), "model": rerank.model, "provider": rerank.vendor},
+            "ocr": {"configured": ocr.has_key(), "model": ocr.model, "provider": ocr.vendor},
         },
         "indexing": {
             "current_model": embedding.model if embedding.has_key() else components["embedding"]["model"],
@@ -234,6 +341,13 @@ def capabilities(uid: str = Depends(require_user)):
         "automatic_model_fallback": False,
         "user_id": uid,
     })
+
+
+@router.put("/local-mode")
+def set_local_mode(body: LocalModeBody, uid: str = Depends(require_user)):
+    from app.research import local_mode
+
+    return _data(local_mode.set_enabled(uid, body.enabled))
 
 
 @router.post("/setup/check")
@@ -260,6 +374,87 @@ def project_detail(project_id: str, uid: str = Depends(require_user)):
     if project is None:
         raise service.ResearchError(404, "project_not_found", "课题不存在或不属于当前用户")
     return _data(project)
+
+
+@router.get("/projects/{project_id}/state")
+def project_state(project_id: str, uid: str = Depends(require_user)):
+    from app.research import state
+
+    return _data(state.project_state(uid, project_id))
+
+
+@router.patch("/projects/{project_id}/state")
+def update_project_state(project_id: str, body: ProjectStateBody, uid: str = Depends(require_user)):
+    from app.research import state
+
+    return _data(state.update_project_state(
+        uid, project_id, research_question=body.research_question,
+        next_action=body.next_action, expected_updated_at=body.expected_updated_at,
+    ))
+
+
+@router.post("/projects/{project_id}/state/entries")
+def create_state_entry(project_id: str, body: StateEntryBody, uid: str = Depends(require_user)):
+    from app.research import state
+
+    refs = [ref.model_dump() for ref in body.source_refs]
+    return _data(state.create_entry(
+        uid, project_id, kind=body.kind, content=body.content,
+        definition=body.definition, abbreviation=body.abbreviation, source_refs=refs,
+    ), "created", 201)
+
+
+@router.patch("/state-entries/{entry_id}")
+def update_state_entry(entry_id: str, body: StateEntryUpdateBody, uid: str = Depends(require_user)):
+    from app.research import state
+
+    refs = [ref.model_dump() for ref in body.source_refs] if body.source_refs is not None else None
+    return _data(state.update_entry(
+        uid, entry_id, expected_version=body.expected_version, content=body.content,
+        definition=body.definition, abbreviation=body.abbreviation, status=body.status, source_refs=refs,
+    ))
+
+
+@router.get("/projects/{project_id}/experiments")
+def list_experiments(project_id: str, uid: str = Depends(require_user)):
+    from app.research import experiments
+
+    return _data({"items": experiments.list_experiments(uid, project_id)})
+
+
+@router.post("/projects/{project_id}/experiments")
+def create_experiment(project_id: str, body: ExperimentBody, uid: str = Depends(require_user)):
+    from app.research import experiments
+
+    return _data(experiments.create_experiment(uid, project_id, **body.model_dump()), "created", 201)
+
+
+@router.patch("/experiments/{experiment_id}")
+def update_experiment(experiment_id: str, body: ExperimentUpdateBody, uid: str = Depends(require_user)):
+    from app.research import experiments
+
+    refs = [ref.model_dump() for ref in body.result_source_refs] if body.result_source_refs is not None else None
+    return _data(experiments.update_experiment(
+        uid, experiment_id, expected_version=body.expected_version,
+        fields=body.fields, status=body.status, result_source_refs=refs,
+    ))
+
+
+@router.post("/projects/{project_id}/synthesis")
+def create_synthesis(project_id: str, body: SynthesisBody, uid: str = Depends(require_user)):
+    from app.research import synthesis
+
+    return _data(synthesis.create_synthesis(
+        uid, project_id, document_ids=body.document_ids, query=body.query,
+        provider=body.provider, model_id=body.model_id, task_id=body.task_id, approval_id=body.approval_id,
+    ))
+
+
+@router.post("/synthesis/{generation_id}/save-note")
+def save_synthesis_note(generation_id: str, body: SaveSynthesisBody, uid: str = Depends(require_user)):
+    from app.research import synthesis
+
+    return _data(synthesis.save_synthesis_note(uid, generation_id, title=body.title), "pending_review", 201)
 
 
 @router.post("/projects/{project_id}/documents")
@@ -361,17 +556,24 @@ def highlight_source(document_id: str, body: SourceHighlightBody, uid: str = Dep
 
 
 @router.post("/documents/{document_id}/ocr")
-def run_ocr(document_id: str, uid: str = Depends(require_user)):
+def run_ocr(document_id: str, body: OcrRequestBody = OcrRequestBody(), uid: str = Depends(require_user)):
     from app.research.ocr import ocr_document
 
-    return _data(ocr_document(uid, document_id), "ocr_completed")
+    result = ocr_document(
+        uid, document_id, expected_version=body.expected_version, provider=body.provider,
+        task_id=body.task_id, approval_id=body.approval_id,
+    )
+    return _data(result, result.get("status") or "ocr_completed")
 
 
 @router.post("/documents/{document_id}/analysis")
-def analyze_document(document_id: str, uid: str = Depends(require_user)):
+def analyze_document(document_id: str, body: AnalysisRequestBody = AnalysisRequestBody(), uid: str = Depends(require_user)):
     from app.research.paper_analysis import analyze_document as analyze
 
-    result = analyze(uid, document_id)
+    result = analyze(
+        uid, document_id, provider=body.provider, model_id=body.model_id,
+        task_id=body.task_id, approval_id=body.approval_id,
+    )
     return _data(result, result["analysis_status"])
 
 
@@ -432,12 +634,25 @@ def messages(conversation_id: str, uid: str = Depends(require_user)):
     return _data({"items": service.conversation_messages(uid, conversation_id)})
 
 
+@router.post("/projects/{project_id}/citations/verify")
+def verify_citation(project_id: str, body: CitationVerificationBody, uid: str = Depends(require_user)):
+    from app.research import citation_verification
+
+    result = citation_verification.verify_citation(
+        uid, project_id, doi=body.doi, title=body.title, author=body.author, year=body.year,
+        confidentiality=body.confidentiality, task_id=body.task_id, approval_id=body.approval_id,
+    )
+    return _data(result, result["status"], 200 if result["status"] == "awaiting_outbound_approval" else 201)
+
+
 @router.post("/projects/{project_id}/chat")
 def chat(project_id: str, body: ChatBody, uid: str = Depends(require_user)):
     result = service.chat(
         uid, project_id, message=body.message, conversation_id=body.conversation_id,
         cross_project_ids=body.cross_project_ids, provider=body.provider, model_id=body.model_id,
         query_confidentiality=body.query_confidentiality, task_id=body.task_id, approval_id=body.approval_id,
+        query_plan=body.query_plan, selected_document_ids=body.selected_document_ids,
+        allow_all_documents=body.allow_all_documents,
     )
     return _data(result, result["status"])
 
@@ -465,9 +680,11 @@ def set_baseline(project_id: str, body: BaselineBody, uid: str = Depends(require
 def generate(project_id: str, body: GenerationBody, uid: str = Depends(require_user)):
     from app.research.generations import generate_output
 
-    return _data(generate_output(
+    result = generate_output(
         uid, project_id, kind=body.kind, query=body.query, document_ids=body.document_ids,
-    ), "generated", 201)
+        provider=body.provider, model_id=body.model_id, task_id=body.task_id, approval_id=body.approval_id,
+    )
+    return _data(result, result["status"], 200 if result["status"] == "awaiting_outbound_approval" else 201)
 
 
 @router.get("/generations/{generation_id}")
@@ -671,10 +888,10 @@ def cancel_batch_item(item_id: str, uid: str = Depends(require_user)):
 
 
 @router.post("/batch-items/{item_id}/retry")
-def retry_batch_item(item_id: str, uid: str = Depends(require_user)):
+def retry_batch_item(item_id: str, body: BatchRetryBody = BatchRetryBody(), uid: str = Depends(require_user)):
     from app.research.batches import retry_batch_item as retry
 
-    return _data(retry(uid, item_id), "queued", 202)
+    return _data(retry(uid, item_id, approval_id=body.approval_id), "queued", 202)
 
 
 @router.get("/documents/{document_id}/versions")

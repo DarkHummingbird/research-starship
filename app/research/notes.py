@@ -96,6 +96,11 @@ def mark_source_invalid(conn, source_document_id: str, *, reason: str) -> int:
         note.parsed_json = json.dumps(parsed, ensure_ascii=False)
         deactivate_note_memories(conn, note.id)
         count += 1
+    from app.research.state import mark_entries_invalid
+    from app.research.experiments import mark_experiments_invalid
+
+    mark_entries_invalid(conn, source_document_id, reason=reason)
+    mark_experiments_invalid(conn, source_document_id, reason=reason)
     return count
 
 

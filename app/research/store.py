@@ -15,6 +15,9 @@ from app.data_access.research import (
     ResearchDocument,
     ResearchDocumentVersion,
     ResearchEmbedding,
+    ResearchExperiment,
+    ResearchStateEntry,
+    ResearchUserSetting,
     ResearchGeneration,
     ResearchMemory,
     ResearchMessage,
@@ -31,7 +34,7 @@ from app.data_access.research import (
 
 __all__ = [
     "ResearchBatch", "ResearchBatchItem", "ResearchAsyncTask", "ResearchChange", "ResearchChunk", "ResearchConflict",
-    "ResearchConversation", "ResearchDocument", "ResearchDocumentVersion", "ResearchEmbedding",
+    "ResearchConversation", "ResearchDocument", "ResearchDocumentVersion", "ResearchEmbedding", "ResearchExperiment", "ResearchStateEntry", "ResearchUserSetting",
     "ResearchGeneration", "ResearchMemory", "ResearchMessage", "ResearchOutboundApproval",
     "ResearchProject", "ResearchSecurityEvent", "data_dir", "db_path", "init_db",
     "model_dict", "utc_now", "json_value", "public_document", "public_approval",

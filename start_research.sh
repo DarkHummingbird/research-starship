@@ -16,6 +16,10 @@ if [[ -f "$PROVIDER_CONFIG" ]]; then
   source "$PROVIDER_CONFIG"
   set +a
 fi
+QWEN_RAG_CONFIG="$(dirname "$PROVIDER_CONFIG")/qwen-rag.json"
+if [[ -z "${LLM_CONFIG_FILE:-}" && -f "$QWEN_RAG_CONFIG" ]]; then
+  export LLM_CONFIG_FILE="$QWEN_RAG_CONFIG"
+fi
 
 if [[ ! -x "$PYTHON" ]]; then
   echo "没有找到 Python 运行环境。请先按交付记录安装依赖，或设置 PERSONAL_AGENT_VENV。" >&2

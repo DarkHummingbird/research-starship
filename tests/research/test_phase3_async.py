@@ -144,7 +144,7 @@ def test_running_batch_cancel_and_version_preserved(client, project, monkeypatch
                            files={'file': ('one.md', b'# synthetic\n\nEvidence only.', 'text/markdown')},
                            data={'document_type':'tutorial', 'confidentiality':'L3'}).json()['data']
     started = threading.Event()
-    def slow(uid, doc_id, version, operation):
+    def slow(uid, doc_id, version, operation, task_id='', approval_id=''):
         started.set()
         while True: check_cancelled(); time.sleep(.02)
     monkeypatch.setattr(batches, '_run_document', slow)

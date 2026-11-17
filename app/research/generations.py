@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -173,10 +175,19 @@ def generate_output(
     kind: str,
     query: str,
     document_ids: list[str] | None = None,
+    provider: str = "external",
+    model_id: str = "",
+    task_id: str = "",
+    approval_id: str = "",
 ) -> dict[str, Any]:
     from app.research.service import ResearchError, _document, search_confirmed
     from app.research.task_control import check_cancelled
+    from app.research.local_mode import require_enabled
 
+    if provider not in ("external", "rag"):
+        raise ResearchError(400, "invalid_provider", "研究辅助通道必须为在线或本地生成")
+    if provider == "rag":
+        require_enabled(user_id)
     if kind not in KINDS:
         raise ResearchError(400, "invalid_generation_kind", "不支持的生成类型")
     with migration_session() as conn:
@@ -240,8 +251,30 @@ def generate_output(
         + (evidence_context(matches) if matches else "没有已确认证据。")
         + f"\n\n用户目标：{query or '按任务类型处理当前资料'}"
     )
+    classification = gateway.highest_level([item["confidentiality"] for item in matches]) if matches else "L1"
     try:
-        generated = generate(prompt, max_tokens=1200, timeout=240)
+        if provider == "rag":
+            generated = generate(prompt, max_tokens=1200, timeout=240)
+        else:
+            from app.research.online_generation import generate_online
+
+            fragments = [{
+                "document_id": None, "version": 0, "chunk_id": "query", "chapter": "研究辅助目标",
+                "snippet": query or "按任务类型处理当前资料", "classification": classification,
+                "sha256": hashlib.sha256((query or "按任务类型处理当前资料").encode("utf-8")).hexdigest(),
+            }, *[{
+                "document_id": item["document_id"], "version": item["document_version"], "chunk_id": item["chunk_id"],
+                "chapter": item["chapter"], "snippet": item["content"], "classification": item["confidentiality"],
+                "sha256": hashlib.sha256(item["content"].encode("utf-8")).hexdigest(),
+            } for item in matches]]
+            online = generate_online(
+                user_id, project_id, model_id=model_id, task_id=task_id, approval_id=approval_id,
+                purpose=f"研究辅助：{kind}", operation="summary", prompt=prompt,
+                fragments=fragments, max_tokens=1200,
+            )
+            if online["status"] == "awaiting_outbound_approval":
+                return {**online, "kind": kind, "query": query}
+            generated = {"text": online["content"], "model": online["model"]}
     except LocalComponentError as exc:
         raise ResearchError(503, "local_model_unavailable", f"本地生成暂停：{exc.message}") from exc
     content = re.sub(r"\s*\[end of text\]\s*$", "", generated["text"], flags=re.I).strip()
@@ -257,6 +290,7 @@ def generate_output(
     } for item in matches]
     classification = gateway.highest_level([item["confidentiality"] for item in matches]) if matches else "L1"
     generation_id = "gen_" + uuid.uuid4().hex
+    model_name = generated["model"] if provider == "external" else f"local:{generated['model']}"
     def verify_sources(conn):
         check_cancelled()
         for source in sources:
@@ -274,7 +308,7 @@ def generate_output(
             row = store.ResearchGeneration(
                 id=generation_id, user_id=user_id, project_id=project_id, kind=kind,
                 content=content, sources_json=json.dumps(sources, ensure_ascii=False),
-                model=f"local:{generated['model']}", confidentiality=classification,
+                model=model_name, confidentiality=classification,
                 status="rejected", archived_document_id="", created_at=store.utc_now(),
             )
             conn.add(row)
@@ -286,7 +320,7 @@ def generate_output(
         row = store.ResearchGeneration(
             id=generation_id, user_id=user_id, project_id=project_id, kind=kind,
             content=content, sources_json=json.dumps(sources, ensure_ascii=False),
-            model=f"local:{generated['model']}", confidentiality=classification,
+            model=model_name, confidentiality=classification,
             status="pending", archived_document_id="", created_at=store.utc_now(),
         )
         conn.add(row)
@@ -423,6 +457,8 @@ def create_study_note(
     note_type: str = "user_record",
     source_refs: list[dict[str, Any]] | None = None,
     model_info: dict[str, Any] | None = None,
+    conn=None,
+    index: bool = True,
 ) -> dict[str, Any]:
     from app.research.notes import NOTE_TYPES, note_confidentiality, validate_sources
     from app.research.service import ResearchError, import_document
@@ -437,15 +473,16 @@ def create_study_note(
     if document_type == "research_note" and note_type in ("source_fact", "ai_summary") and not source_refs:
         raise ResearchError(422, "note_source_required", "来源事实和 AI 归纳必须关联真实资料与逐字引文")
     if source_refs:
-        with migration_session() as conn:
-            source_refs = validate_sources(conn, user_id, project_id, source_refs)
+        with (nullcontext(conn) if conn is not None else migration_session()) as session:
+            source_refs = validate_sources(session, user_id, project_id, source_refs)
         confidentiality = note_confidentiality(confidentiality, source_refs)
     source = f"# {title.strip()}\n\n{content.strip()}"
     result = import_document(
         user_id, project_id, filename=f"{uuid.uuid4().hex}-{document_type}.md",
         content=source.encode("utf-8"), confidentiality=confidentiality, document_type=document_type,
+        conn=conn, index=index,
     )
-    if document_type == "research_note":
+    if document_type == "research_note" or source_refs:
         parsed = dict(result.get("parsed") or {})
         parsed.update({
             "note_type": note_type,
@@ -456,11 +493,11 @@ def create_study_note(
                 "task_id": str((model_info or {}).get("task_id") or ""),
             },
         })
-        with memory_session() as conn:
-            row = conn.execute(select(store.ResearchDocument).where(
+        with (nullcontext(conn) if conn is not None else memory_session()) as session:
+            row = session.execute(select(store.ResearchDocument).where(
                 store.ResearchDocument.id == result["id"], store.ResearchDocument.user_id == user_id
             )).scalar_one()
             row.parsed_json = json.dumps(parsed, ensure_ascii=False)
-            conn.flush()
+            session.flush()
         result["parsed"] = parsed
     return result

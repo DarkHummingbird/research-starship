@@ -15,7 +15,7 @@ def test_quarantined_candidate_requires_explicit_resolution(client, paper, monke
                         "evidence": {"chunk_id": source["id"], "quote": "not in source"}}]}
     monkeypatch.setattr(analysis_module, "generate", lambda *a, **k: {"text": json.dumps(raw), "model": "synthetic"})
     url = f"/api/research/documents/{doc['id']}"
-    result = client.post(url + "/analysis", headers=headers)
+    result = client.post(url + "/analysis", json={"provider": "rag"}, headers=headers)
     assert result.status_code == 200, result.text
     result = result.json()["data"]
     assert result["analysis_status"] == "needs_review"
@@ -54,7 +54,7 @@ def test_chinese_question_retrieves_english_accuracy(client, paper, monkeypatch,
                "metrics": [{"statement": "准确率", "value": "87.4", "unit": "%",
                             "evidence": {"chunk_id": source["id"], "quote": "SafeRAG reaches 87.4% accuracy on SYNTH-10."}}]}
     monkeypatch.setattr(analysis_module, "generate", lambda *a, **k: {"text": json.dumps(payload), "model": "synthetic"})
-    assert client.post(f"/api/research/documents/{doc['id']}/analysis", headers=headers).status_code == 200
+    assert client.post(f"/api/research/documents/{doc['id']}/analysis", json={"provider": "rag"}, headers=headers).status_code == 200
     assert client.post(f"/api/research/documents/{doc['id']}/review", headers=headers, json={"expected_version": 1, "approved": True}).status_code == 200
     # A controlled similarity removes local-model availability from the filter regression.
     if real_embedding and not local.component_status()["embedding"]["available"]:
