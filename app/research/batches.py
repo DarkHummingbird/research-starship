@@ -156,6 +156,17 @@ def _process_item_scoped(item_id: str) -> None:
         else:
             item.status = "pending_review"
             item.completed_at = store.utc_now()
+            document = conn.execute(select(store.ResearchDocument).where(
+                store.ResearchDocument.id == item.document_id
+            )).scalar_one_or_none()
+            from app.agent.proactive.store import create_item
+            create_item(
+                user_id, "research_review",
+                title="有资料等待你确认",
+                body=f"《{document.title if document else item.document_id}》已处理完成，请到科研星舰的“待我确认”核对后再用于问答。",
+                payload={"document_id": item.document_id, "project_id": item.project_id, "batch_item_id": item.id},
+                period_key=f"{item.document_id}:v{item.document_version}",
+            )
         _finish_batch(conn, batch_id)
 
 

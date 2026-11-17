@@ -89,6 +89,15 @@ class ChatBody(BaseModel):
     allow_all_documents: bool = False
 
 
+class DiscussionBody(BaseModel):
+    message: str
+    history: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    model_id: str = ""
+    query_confidentiality: Literal["L1", "L2", "L3"] = "L1"
+    task_id: str = ""
+    approval_id: str = ""
+
+
 class OutboundPrepareBody(BaseModel):
     project_id: str
     task_id: str
@@ -616,6 +625,14 @@ def index_document(document_id: str, body: IndexDocumentBody, uid: str = Depends
     if result["embedding_status"] == "stale":
         raise service.ResearchError(409, "document_version_changed", "资料版本已变化，请重新检查")
     return _data(result, result["embedding_status"])
+
+
+@router.post("/projects/{project_id}/discussion")
+def discussion(project_id: str, body: DiscussionBody, uid: str = Depends(require_user)):
+    return _data(service.discuss(
+        uid, project_id, message=body.message, history=body.history, model_id=body.model_id,
+        query_confidentiality=body.query_confidentiality, task_id=body.task_id, approval_id=body.approval_id,
+    ))
 
 
 @router.post("/projects/{project_id}/conversations")

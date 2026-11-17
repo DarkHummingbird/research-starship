@@ -3,6 +3,7 @@ const VIEW_CONTENT = {
   library: ["你的研究资料", "资料库", "导入、阅读并整理当前课题的资料。"],
   review: ["人工确认", "待我确认", "只处理需要核对的内容，确认后才会进入正式课题知识。"],
   chat: ["可信回答", "课题问答", "基于当前课题已确认的资料提问，并回到原文核对。"],
+  discussion: ["自由讨论", "自由讨论", "不读取课题资料，用于头脑风暴、概念解释和方案讨论。"],
   data: ["模型、隐私与数据", "数据与隐私", "统一管理在线模型、本地组件、保密规则、导出和历史版本。"],
 };
 const initialView = window.location.hash.slice(1);
@@ -14,6 +15,7 @@ const state = {
   paperScope: new Set(),
   allowAllDocuments: false,
   lastChatBody: null,
+  discussion: [],
   conversationId: "",
   previewTab: "source",
   pendingChat: null,
@@ -345,6 +347,7 @@ async function loadCapabilities() {
   const generationSelect = $('generationModel');
   select.replaceChildren();
   generationSelect.replaceChildren();
+  $('discussionModel').replaceChildren();
   for (const model of models) {
     const option = document.createElement('option');
     option.value = model.id;
@@ -354,6 +357,10 @@ async function loadCapabilities() {
     generationOption.value = model.id;
     generationOption.textContent = option.textContent;
     generationSelect.append(generationOption);
+    const discussionOption = document.createElement('option');
+    discussionOption.value = model.id;
+    discussionOption.textContent = `${model.provider} · ${model.id}`;
+    $('discussionModel').append(discussionOption);
   }
   if (models.length && $('queryLevel').value !== 'L3') $('provider').value = 'external';
   else if (!models.length) $('provider').value = 'local';
@@ -616,7 +623,10 @@ async function switchView(view) {
     await loadConversations();
     await restoreConversation();
   }
-  if (view === "data" && state.projectId) await loadGovernance();
+  if (view === "data" && state.projectId) {
+    await loadGovernance();
+    await loadWorkProfile();
+  }
 }
 
 async function selectProject(projectId) {
@@ -2156,3 +2166,141 @@ window.researchOpenDocument = async source => {
   $("documentTitle").focus();
 };
 start();
+
+
+function renderDiscussion() {
+  const log = $("discussionLog");
+  log.replaceChildren();
+  if (!state.discussion.length) {
+    log.innerHTML = '<p class="empty">可以从"帮我理清这个问题的研究思路"开始。</p>';
+    return;
+  }
+  for (const item of state.discussion) {
+    const article = document.createElement("article");
+    article.className = `message ${item.role}`;
+    const text = document.createElement("p");
+    text.textContent = item.content;
+    article.append(text);
+    log.append(article);
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendDiscussion(body) {
+  const result = await api(`/api/research/projects/${state.projectId}/discussion`, {method: "POST", body: JSON.stringify(body)});
+  if (result.status === "awaiting_outbound_approval") {
+    showApproval(result, body, "", async (approval) => {
+      await sendDiscussion({...body, task_id: result.task_id, approval_id: approval.id});
+    });
+    return;
+  }
+  state.discussion.push({role: "assistant", content: result.answer});
+  renderDiscussion();
+}
+
+$("discussionForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.projectId) { toast("请先选择课题"); return; }
+  const message = $("discussionInput").value.trim();
+  if (!message) return;
+  const history = state.discussion.slice(-10);
+  state.discussion.push({role: "user", content: message});
+  renderDiscussion();
+  $("discussionInput").value = "";
+  const body = {
+    message, history, model_id: $("discussionModel").value,
+    query_confidentiality: $("discussionLevel").value,
+  };
+  const form = event.currentTarget;
+  setBusy(form, true);
+  try { await sendDiscussion(body); }
+  catch (error) { toast(error.message); }
+  finally { setBusy(form, false); }
+});
+
+
+async function loadSchedules() {
+  const list = $("scheduleList");
+  const result = await api("/api/schedules");
+  const items = result.schedules || [];
+  list.replaceChildren();
+  if (!items.length) {
+    list.innerHTML = '<p class="empty">还没有定时任务。可以在自由讨论中说明需求，由系统确认后创建。</p>';
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "task-item";
+    const text = document.createElement("p");
+    const trigger = item.trigger ? (item.trigger.cron || item.trigger.every || item.trigger.at || "") : "";
+    text.textContent = `${item.name || item.job_kind || "定时任务"} · ${trigger} · ${item.status} · 运行 ${item.run_count || 0} 次`;
+    row.append(text);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = item.status === "active" ? "暂停" : "恢复";
+    toggle.addEventListener("click", async () => {
+      try {
+        await api(`/api/schedules/${item.id}/${item.status === "active" ? "pause" : "resume"}`, {method: "POST"});
+        await loadSchedules();
+      } catch (error) { toast(error.message); }
+    });
+    const run = document.createElement("button");
+    run.type = "button";
+    run.textContent = "立即运行";
+    run.addEventListener("click", async () => {
+      try {
+        await api(`/api/schedules/${item.id}/run_now`, {method: "POST"});
+        toast("已触发一次运行");
+        await loadSchedules();
+      } catch (error) { toast(error.message); }
+    });
+    row.append(toggle, run);
+    list.append(row);
+  }
+}
+
+$("taskTabTasks").addEventListener("click", () => {
+  $("taskTabTasks").classList.add("active");
+  $("taskTabSchedules").classList.remove("active");
+  $("taskList").hidden = false;
+  $("scheduleList").hidden = true;
+});
+$("taskTabSchedules").addEventListener("click", async () => {
+  $("taskTabSchedules").classList.add("active");
+  $("taskTabTasks").classList.remove("active");
+  $("taskList").hidden = true;
+  $("scheduleList").hidden = false;
+  try { await loadSchedules(); } catch (error) { toast(error.message); }
+});
+
+async function loadWorkProfile() {
+  const session = await api("/api/session", {method: "POST"});
+  const result = await api(`/api/profile/${session.user_id}`);
+  const profile = result.profile || {};
+  $("workName").value = profile.name || "";
+  $("workOccupation").value = profile.occupation || "";
+  $("workTz").value = profile.tz || "";
+  $("workInterests").value = (profile.interests || []).join("\n");
+  $("workPreferences").value = (profile.preferences || []).join("\n");
+  $("workFacts").value = (profile.facts || []).join("\n");
+}
+
+$("workProfileForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const lines = (id) => $(id).value.split("\n").map(item => item.trim()).filter(Boolean);
+  try {
+    const session = await api("/api/session", {method: "POST"});
+    await api("/api/profile", {method: "POST", body: JSON.stringify({
+      user_id: session.user_id,
+      profile: {
+        name: $("workName").value.trim(),
+        occupation: $("workOccupation").value.trim(),
+        tz: $("workTz").value.trim(),
+        interests: lines("workInterests"),
+        preferences: lines("workPreferences"),
+        facts: lines("workFacts"),
+      },
+    })});
+    toast("工作档案已保存");
+  } catch (error) { toast(error.message); }
+});

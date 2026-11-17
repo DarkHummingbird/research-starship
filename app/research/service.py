@@ -1200,6 +1200,50 @@ def chat(
     }
 
 
+DISCUSSION_SYSTEM = ("你是科研工作台中的自由讨论助手，帮助用户理清思路、解释概念、讨论方案。"
+                     "你没有查阅用户的资料，不得编造来源、指标或实验结果；需要依据论文内容回答时，提醒用户到课题问答中核验。")
+
+
+def discuss(
+    user_id: str,
+    project_id: str,
+    *,
+    message: str,
+    history: list[dict[str, Any]] | None = None,
+    model_id: str = "",
+    query_confidentiality: str = "L1",
+    task_id: str = "",
+    approval_id: str = "",
+) -> dict[str, Any]:
+    message = message.strip()
+    if not message or len(message) > 20000:
+        raise ResearchError(400, "invalid_message", "问题须为 1–20000 个字符")
+    if query_confidentiality not in gateway.LEVELS:
+        raise ResearchError(400, "invalid_confidentiality", "保密等级必须为 L1、L2 或 L3")
+    with memory_session() as conn:
+        _project(conn, user_id, project_id)
+    from app.research.online_generation import generate_online
+
+    lines = []
+    for item in (history or [])[-10:]:
+        role = "用户" if item.get("role") == "user" else "助手"
+        lines.append(f"{role}：{str(item.get('content') or '')[:2000]}")
+    prompt = ("\n".join(lines) + "\n" if lines else "") + f"用户：{message}"
+    fragment = {
+        "document_id": None, "version": 0, "chunk_id": "query", "chapter": "用户问题",
+        "snippet": message, "classification": query_confidentiality,
+        "sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
+    }
+    result = generate_online(
+        user_id, project_id, model_id=model_id, task_id=task_id, approval_id=approval_id,
+        purpose="自由讨论", operation="qa", prompt=prompt, fragments=[fragment],
+        max_tokens=1500, system=DISCUSSION_SYSTEM,
+    )
+    if result["status"] == "awaiting_outbound_approval":
+        return result
+    return {"status": "answered", "answer": result["content"], "model": result["model"]}
+
+
 def security_events(user_id: str, project_id: str, limit: int = 100) -> list[dict[str, Any]]:
     with migration_session() as conn:
         _project(conn, user_id, project_id)

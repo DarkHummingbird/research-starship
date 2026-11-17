@@ -1868,7 +1868,14 @@ if STATIC.exists():
 
 @app.get("/")
 def index():
-    return _versioned_page("index.html")
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/research", status_code=302)
+
+
+@app.get("/assistant", include_in_schema=False)
+def assistant_index():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/research", status_code=302)
 
 
 @app.get("/research", include_in_schema=False)

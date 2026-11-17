@@ -27,8 +27,7 @@
         </div>
       </div>
     </div>
-    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><p>资料、问答和轻量导出任务可在文件接收完成后刷新查看。处理中的外部请求不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div></div></details>
-    <a class="quiet-button" href="/" title="离开科研工作区，打开助手" aria-label="离开科研工作区，打开助手">助手</a>
+    <details class="task-center"><summary><span class="sr-only">任务中心：</span><span class="task-status"><span class="status-dot" aria-hidden="true"></span><span id="taskCount" role="status" aria-live="polite" aria-atomic="true">无运行任务</span></span></summary><div class="task-center-panel"><h2>任务中心</h2><div class="task-center-tabs"><button id="taskTabTasks" type="button" class="active">任务</button><button id="taskTabSchedules" type="button">定时与提醒</button></div><p>资料、问答和轻量导出任务可在文件接收完成后刷新查看。处理中的外部请求不能保证中途停止，结果未知时请先核对。</p><div id="taskList"><p>暂无后台任务。</p></div><div id="scheduleList" hidden></div></div></details>
     <button id="dataManagementShortcut" class="quiet-button" type="button">数据与隐私</button>
   </header>
 
@@ -50,6 +49,10 @@
         <button class="nav-item" type="button" data-view-target="chat">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3v-6a3 3 0 0 1-1-2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3z"/></svg>
           <span>课题问答</span>
+        </button>
+        <button class="nav-item" type="button" data-view-target="discussion">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg>
+          <span>自由讨论</span>
         </button>
         <button class="nav-item" type="button" data-view-target="data">
           <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg>
@@ -228,7 +231,7 @@
         <details class="panel secondary-panel">
           <summary><span>研究辅助</span><small>实验设想、记忆对照与表格；生成内容仍需核对</small></summary>
           <form id="generationForm" class="generation-form">
-            <label>辅助类型<select id="generationKind"><option value="ablation">消融实验设想</option><option value="compare">记忆对照</option><option value="table">对比表格</option><option value="pseudocode">伪代码</option><option value="review">模拟审稿</option></select></label>
+            <label>辅助类型<select id="generationKind"><option value="ablation">消融实验设想</option><option value="compare">记忆对照</option><option value="table">对比表格</option><option value="pseudocode">伪代码</option><option value="review">模拟审稿</option><option value="writing">写作草稿</option></select></label>
             <label>目标或问题<textarea id="generationQuery" rows="2" placeholder="例如：设计去除证据过滤的消融实验"></textarea></label>
             <label>生成方式<select id="generationProvider"><option value="external" selected>在线模型（默认）</option><option value="rag">本地模型</option></select></label>
             <label id="generationModelField">在线模型<select id="generationModel" aria-label="研究辅助在线模型"></select></label>
@@ -238,7 +241,35 @@
         </details>
       </div>
 
+      <div id="discussionView" data-view="discussion" hidden>
+        <section class="panel chat-panel" aria-labelledby="discussionTitle">
+          <div class="panel-heading"><div><h3 id="discussionTitle">自由讨论</h3><p>不读取课题资料，用于头脑风暴、解释概念和方案讨论；需要依据论文时请回到课题问答。</p></div></div>
+          <div id="discussionLog" class="chat-log" role="log" aria-live="polite"><p class="empty">可以从"帮我理清这个问题的研究思路"开始。</p></div>
+          <form id="discussionForm" class="chat-form">
+            <label for="discussionInput">你的问题</label>
+            <textarea id="discussionInput" rows="3" required placeholder="例如：帮我把这个研究问题拆成几个可验证的假设"></textarea>
+            <div class="chat-options">
+              <label>在线模型<select id="discussionModel" aria-label="自由讨论在线模型"></select></label>
+              <label>保密程度<select id="discussionLevel"><option value="L1">公开</option><option value="L2" selected>内部</option></select></label>
+              <button id="sendDiscussion" class="primary" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+      </div>
+
       <div id="dataView" data-view="data" hidden>
+        <section class="panel" aria-labelledby="workProfileTitle">
+          <div class="panel-heading"><div><h3 id="workProfileTitle">我的工作档案</h3><p>用于自由讨论和写作时的背景信息；不会作为课题问答的证据来源。</p></div></div>
+          <form id="workProfileForm" class="state-form">
+            <label>姓名（署名用）<input id="workName" /></label>
+            <label>角色<input id="workOccupation" placeholder="例如：硕士研究生" /></label>
+            <label>时区<input id="workTz" placeholder="例如：Asia/Shanghai" /></label>
+            <label>研究方向与领域<textarea id="workInterests" rows="2" placeholder="每行一项"></textarea></label>
+            <label>工作与写作偏好<textarea id="workPreferences" rows="2" placeholder="每行一项"></textarea></label>
+            <label>常用方法或背景事实<textarea id="workFacts" rows="2" placeholder="每行一项"></textarea></label>
+            <button class="primary" type="submit">保存工作档案</button>
+          </form>
+        </section>
         <section class="panel model-privacy-center" aria-labelledby="modelStatusTitle">
           <div class="panel-heading"><div><h3 id="modelStatusTitle">模型与隐私中心</h3><p>在线模型是默认选择；只有需要处理保密资料时，才准备本地组件。</p></div><span id="privacyModeTag" class="tag">在线模式</span></div>
           <div class="privacy-levels" aria-label="保密等级规则">

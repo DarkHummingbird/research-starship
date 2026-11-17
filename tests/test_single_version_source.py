@@ -25,9 +25,9 @@ def test_no_hardcoded_versions_in_sources():
 
 def test_health_and_pages_serve_file_version(client):
     assert client.get("/health").json()["version"] == VERSION
-    html = client.get("/").text
+    html = client.get("/research").text
     assert "__APP_VERSION__" not in html
-    assert f'content="{VERSION}"' in html and f"?v={VERSION}" in html and f"v{VERSION}" in html
+    assert f'content="{VERSION}"' in html and f"?v={VERSION}" in html
     js = client.get("/static/js/app.js").text
     assert "__APP_VERSION__" not in js and f"?v={VERSION}" in js
     for page in ("/bind", "/sandbox"):

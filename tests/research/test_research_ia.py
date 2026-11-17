@@ -38,8 +38,8 @@ def test_research_page_has_home_and_four_task_workspaces():
     parser = ResearchPageParser()
     parser.feed(html)
 
-    assert parser.views == ["home", "library", "review", "chat", "data"]
-    assert parser.nav_targets == ["home", "library", "review", "chat", "data"]
+    assert parser.views == ["home", "library", "review", "chat", "discussion", "data"]
+    assert parser.nav_targets == ["home", "library", "review", "chat", "discussion", "data"]
     assert len(parser.ids) == len(set(parser.ids))
     assert "latex" not in parser.generation_options
     assert "恢复完整备份" not in html
@@ -47,7 +47,7 @@ def test_research_page_has_home_and_four_task_workspaces():
     assert "不提供整库恢复" in html
     assert "创建完整备份" not in html
     assert "exportLibrary" not in html
-    assert "离开科研工作区，打开助手" in html
+    assert "离开科研工作区" not in html
     assert "诊断与原始输出" in html
     for internal_term in ("P4", "Personal Agent", "本地 RAG"):
         assert internal_term not in html
@@ -70,3 +70,9 @@ def test_full_backup_creation_is_removed(client, auth, tmp_path, monkeypatch):
         response = client.post(path, json={"confirmed": True}, headers=headers)
         assert response.status_code == 410
         assert response.json()["detail"]["code"] == "full_backup_removed"
+
+
+def test_root_redirects_to_research(client):
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/research"

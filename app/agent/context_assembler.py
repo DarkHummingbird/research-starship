@@ -50,7 +50,7 @@ def clip(text: str, budget: int) -> str:
 
 
 def memory_context(user_id: str, *, query: str = "", tags=None, limit: int = 6,
-                   include_profile: bool = True, token_budget: int = 1200) -> str:
+                   include_profile: bool = True, include_episodes: bool = True, token_budget: int = 1200) -> str:
     from app.agent.memory import episodic, profile
     from app.agent.harness.leak import memory_safe
 
@@ -78,7 +78,7 @@ def memory_context(user_id: str, *, query: str = "", tags=None, limit: int = 6,
         return clip("\n\n".join(blocks), token_budget)
     blocks = [profile.format_for_prompt(user_id)] if include_profile else []
     # No episodic lookup until the caller has a query or explicit tags.
-    if limit > 0 and (query.strip() or tags):
+    if include_episodes and limit > 0 and (query.strip() or tags):
         events = episodic.retrieve_events(user_id, query=query, tags=tags, limit=limit)
         if events:
             blocks.append("【相关记忆】\n" + "\n".join(

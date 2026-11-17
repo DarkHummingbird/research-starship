@@ -17,7 +17,7 @@ from app.research.local_components import LocalComponentError, generate
 from app.research.rag import evidence_context
 
 
-KINDS = ("compare", "ablation", "table", "pseudocode", "review", "latex")
+KINDS = ("compare", "ablation", "table", "pseudocode", "review", "latex", "writing")
 
 
 def _table_source_supported(source_lines: list[str], tokens: list[str], value: str) -> bool:
@@ -237,6 +237,7 @@ def generate_output(
         "pseudocode": "输出 Markdown 伪代码，不执行代码，不声称复现成功，不输出虚构实验结果。",
         "review": "以模拟审稿视角列质疑、证据缺口和待验证条件，明确不是正式审稿，不预测录用结果。",
         "latex": "只生成一个局部 LaTeX 片段，例如一个 section 和少量段落。禁止 documentclass、document 环境、cite/citep、bibitem 和 thebibliography。只能使用来源支持的事实并以 [S编号] 引用；缺少 BibTeX 就在末尾写“参考文献元数据待补”，不得生成书目。不得编造指标或实验段落，逐字核对数值及其模型归属。",
+        "writing": "根据用户的写作目标生成可用草稿，例如邮件、通知、论文段落、回复审稿人或工作汇报。语言跟随用户；缺少的收件人、日期、名字等具体信息用【待补充：xxx】占位，不编造事实、数据或引用。",
     }[kind]
     history_note = (
         f"已确认失败实验记录数：{failure_count}。"
@@ -327,7 +328,7 @@ def generate_output(
         conn.flush()
         result = _generation_public(row)
     result.update({
-        "output_category": "simulated_review" if kind == "review" else "latex_draft" if kind == "latex" else "agent_inference",
+        "output_category": "simulated_review" if kind == "review" else "latex_draft" if kind == "latex" else "writing_draft" if kind == "writing" else "agent_inference",
         "history": {
             "failure_experiment_count": failure_count,
             "baseline_document_id": project.current_baseline_id,
@@ -357,7 +358,7 @@ def archive_generation(user_id: str, generation_id: str) -> dict[str, Any]:
         project_id = row.project_id
         content = row.content
         generation_id = row.id
-    type_map = {"ablation": "experiment_idea", "table": "experiment_idea", "pseudocode": "experiment_idea", "latex": "latex_draft"}
+    type_map = {"ablation": "experiment_idea", "table": "experiment_idea", "pseudocode": "experiment_idea", "latex": "latex_draft", "writing": "user_record"}
     document_type = type_map.get(kind, "generated_note")
     source_text = (
         f"# {kind}（模型推断，待人工审核）\n\n{content}\n\n"

@@ -481,3 +481,6 @@ body.no-project #homeView > :not(#nextStepPanel) { display: none; }
   .conversation-item { min-height: 44px; }
   .approval-fragments { max-height: 38vh; }
 }
+.task-center-tabs { display: flex; gap: 12px; margin: 8px 0 12px; }
+.task-center-tabs button { border: 0; background: none; padding: 6px 0; min-height: 32px; color: var(--muted); }
+.task-center-tabs button.active { color: var(--ink); font-weight: 600; border-bottom: 2px solid currentColor; }

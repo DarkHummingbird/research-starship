@@ -14,7 +14,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from app.agent.loop import add_feedback, bump_redraft, can_redraft, check_budget, progress_report
-from app.agent.memory import format_memory_context, write_event
+from app.agent.memory import write_event
 from app.agent.memory.summary import maybe_summarize_turn
 from app.agent.subgraphs.profile import load_profile
 from app.agent.task_loop import Plan, Validation, run_task_loop
@@ -55,7 +55,8 @@ def node_draft(state: AgentState) -> dict[str, Any]:
         }
 
     def observe(ctx) -> dict[str, Any]:
-        memory = format_memory_context(uid, query=request[:200], limit=6) if uid else ""
+        from app.agent.context_assembler import memory_context
+        memory = memory_context(uid, query=request[:200], limit=6, include_episodes=False) if uid else ""
         return {"profile": profile, "memory": memory, "feedback": ctx.reasons()}
 
     def plan(ctx, obs) -> Plan:
