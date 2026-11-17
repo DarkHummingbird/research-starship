@@ -88,7 +88,7 @@ def test_scanned_pdf_manual_offline_ocr_and_review_gate(client, user):
     if not component_status()["ocr"]["available"]:
         pytest.skip("local OCR assets unavailable")
     fitz = pytest.importorskip("fitz")
-    sample = P0_ROOT / "测试样本" / "OCR合成样例.png"
+    sample = Path(__file__).resolve().parents[1] / "fixtures" / "OCR合成样例.png"
     pdf = fitz.open()
     page = pdf.new_page(width=sample.stat().st_size * 0 + 900, height=500)
     page.insert_image(fitz.Rect(20, 20, 880, 480), filename=str(sample))
