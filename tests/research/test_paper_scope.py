@@ -146,3 +146,19 @@ def test_multi_paper_question_without_method_name_asks_scope(client, auth):
     payload = answered.json()["data"]
     assert payload["status"] == "answered"
     assert "clarification" not in payload["query_plan"]
+
+
+def test_unique_method_name_limits_scope_without_clarification(client, auth):
+    headers = auth("implicit-scope-user")
+    project = _project(client, headers, "唯一方法限定")
+    sparse = _paper(client, headers, project["id"], "sparse.md", SPARSE, "BM25")
+    _paper(client, headers, project["id"], "dense.md", DENSE, "Dense Retrieval")
+
+    response = _chat(client, headers, project["id"], "BM25 的准确率是多少")
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    assert result["status"] == "answered"
+    assert result["sources"]
+    assert {item["document_id"] for item in result["sources"]} == {sparse["id"]}
+    assert result["query_plan"].get("implicit_document_id") == sparse["id"]
+    assert "限定" in result["query_plan"].get("scope_note", "")

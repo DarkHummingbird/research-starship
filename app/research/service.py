@@ -519,7 +519,33 @@ def _cover_comparison(ranked, rows, query: str, query_plan: dict[str, Any] | Non
     return selected
 
 
+def _unique_paper_mention(rows, query: str, query_plan: dict[str, Any]) -> str | None:
+    aliases: dict[str, set[str]] = {}
+    for memory, _, document in rows:
+        if document.document_type != "paper" or not memory.entry_id.startswith("method"):
+            continue
+        alias = _method_alias(memory)
+        if alias:
+            aliases.setdefault(alias, set()).add(document.id)
+    query_key = _entity_key(query)
+    mentioned = {alias for alias in aliases if _entity_key(alias) and _entity_key(alias) in query_key}
+    for entity in query_plan.get("entities", []):
+        key = _entity_key(entity)
+        if not key:
+            continue
+        for alias in aliases:
+            alias_key = _entity_key(alias)
+            if key == alias_key or key in alias_key or alias_key in key:
+                mentioned.add(alias)
+    document_ids = set().union(*(aliases[alias] for alias in mentioned)) if mentioned else set()
+    if len(document_ids) == 1:
+        return next(iter(document_ids))
+    return None
+
+
 def _request_paper_scope(rows, query: str, query_plan: dict[str, Any]) -> None:
+    if query_plan.get("implicit_document_id"):
+        return
     aliases: dict[str, set[str]] = {}
     documents: dict[str, dict[str, Any]] = {}
     for memory, _, document in rows:
@@ -626,6 +652,12 @@ def search_confirmed(
         if selected_ids:
             statement = statement.where(store.ResearchDocument.id.in_(selected_ids))
         rows = conn.execute(statement).all()
+        if (not selected_ids and not allow_all_documents and query_plan is not None
+                and query_plan.get("intent") == "single"):
+            implicit = _unique_paper_mention(rows, query, query_plan)
+            if implicit:
+                rows = [row for row in rows if row[2].id == implicit]
+                query_plan["implicit_document_id"] = implicit
         chunk_ids = [chunk.id for _, chunk, _ in rows]
         embeddings = conn.execute(select(store.ResearchEmbedding).where(
             store.ResearchEmbedding.user_id == user_id,
@@ -1039,6 +1071,9 @@ def chat(
     )
     if provider == "external" and gateway.highest_level([query_confidentiality] + [item["confidentiality"] for item in matches]) == "L3":
         raise gateway.PolicyError(403, "l3_external_forbidden", "L3 内容不能连接在线模型；请开启本地保密模式并选择本地生成")
+    if query_plan.get("implicit_document_id"):
+        title = next((item["title"] for item in matches if item["document_id"] == query_plan["implicit_document_id"]), "")
+        query_plan["scope_note"] = f"已按问题中的方法名限定到《{title}》" if title else "已按问题中的方法名限定检索范围"
     if query_plan.get("clarification"):
         return {
             "status": "needs_clarification", "conversation_id": conversation_id,

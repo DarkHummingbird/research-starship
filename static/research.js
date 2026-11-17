@@ -1249,6 +1249,12 @@ function addMessage(role, content, sources = [], model = "", question = "", quer
     coverage.textContent = covered + missing;
     article.append(coverage);
   }
+  if (queryPlan?.scope_note) {
+    const note = document.createElement("small");
+    note.className = "query-plan-coverage";
+    note.textContent = queryPlan.scope_note;
+    article.append(note);
+  }
   if (queryPlan?.retrieval_warning) {
     const warning = document.createElement("small");
     warning.className = "query-plan-coverage";

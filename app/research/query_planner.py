@@ -58,7 +58,7 @@ def validate_plan(payload: Any) -> dict[str, Any]:
         raise ValueError("在线查询计划不符合结构约束")
     planner = str(payload.get("planner") or "")
     metadata = {key: payload.get(key) for key in ("covered", "missing") if isinstance(payload.get(key), list)}
-    metadata_keys = {"planner", "covered", "missing", "clarification", "retrieval_warning", "document_scope", "rerank_status", "embedding_status", "degradation_reasons"}
+    metadata_keys = {"planner", "covered", "missing", "clarification", "retrieval_warning", "document_scope", "rerank_status", "embedding_status", "degradation_reasons", "implicit_document_id", "scope_note"}
     payload = {key: value for key, value in payload.items() if key not in metadata_keys}
     errors = list(Draft202012Validator(SCHEMA).iter_errors(payload))
     if errors:
