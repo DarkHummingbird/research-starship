@@ -7,82 +7,56 @@
 导入资料 → 审核入库 → 理解课题 → 检索证据 → 回答问题 → 沉淀笔记 → 维护研究状态。<br>
 让每条结论都能回到原文，也让 AI 记得你这周研究到哪了。
 
-`RAG` `证据溯源` `课题记忆` `Personal Agent` `MIT`
+`RAG` `证据溯源` `课题记忆` `三级密级` `本地运行`
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](Dockerfile)
 [![Version](https://img.shields.io/badge/version-0.8.2-informational.svg)](VERSION)
 
-**在 [Personal Agent](#附底座文档personal-agent) 底座之上改造**：底座负责"记得住、先确认、不越界"，科研星舰在它之上补了资料审核入库、证据溯源、笔记沉淀与研究状态维护。
-
-[它改了什么](#它相对底座改了什么) · [快速开始](#快速开始) · [工作原理](#工作原理) · [安全与隐私](#安全与隐私) · [底座文档](#附底座文档personal-agent)
+[它解决什么问题](#它解决什么问题) · [关键设计](#关键设计) · [评测](#评测) · [快速开始](#快速开始) · [工作原理](#工作原理) · [安全与隐私](#安全与隐私)
 
 </div>
 
 ---
 
-## 它相对底座改了什么
+## 它解决什么问题
 
-| 底座 | 科研星舰 |
+长期研究同一个课题的人，痛点不是"AI 会不会回答"，而是这三件事：
+
+1. **上下文留不住**——隔一周再打开，AI 已经忘了研究到哪、哪些结论是确认过的；
+2. **结论信不过**——它说是哪篇文献的哪一段？找不到出处就只能自己重新核对；
+3. **资料更新后没人提醒**——文献出了新版、笔记被改过，基于旧版本的结论就悄悄失效了。
+
+科研星舰把这三件事做成一条闭环：**导入资料 → 审核入库 → 理解课题 → 检索证据 → 回答问题 → 沉淀笔记 → 维护研究状态**。
+
+## 关键设计
+
+- **课题级长记忆**：研究目标、核心问题、已确认结论、术语、实验记录与待办跨会话保存；任务级只装载当前需要的上下文，不把整库资料塞进窗口。
+- **资料先审核，再入库**：未核验的资料不进入正式 RAG 库，人工确认后才算数。
+- **每条结论绑定原文**：资料版本 + 章节位置 + 原文片段；没有有效证据就直接拒答，不猜。
+- **资料更新联动复核**：资料增删改后，受影响的笔记与历史结论自动打「待复核」，由人决定保留、修改还是废弃。
+- **三级密级**：L1 / L2 / L3 隔离，最高密级资料的 Embedding、OCR、生成全部本地运行。
+
+## 评测
+
+本地固定评测集（样本与脚本暂未随仓库开源）：
+
+| 指标 | 结果 |
 | --- | --- |
-| 记忆卡记「你是谁」 | **课题级 long-term memory**：研究目标、核心问题、已确认结论、术语、实验记录与待办，跨会话持久保存 |
-| 消息即来即答 | **资料先审核**：未核验资料不进正式 RAG 库，人工确认后才入库 |
-| 回答不标来源 | **每条结论绑定**资料版本、章节位置与原文片段；无有效证据直接拒答 |
-| 记忆只增不减 | **资料更新联动复核**：资料增删改后，受影响的笔记与历史结论自动打「待复核」 |
-| 单用户全权限 | **L1/L2/L3 三级密级**：最高密级资料的 Embedding、OCR、生成全部本地运行 |
+| RAG 召回率 | 87% |
+| 引用匹配准确率 | 82% |
+| 无证据拒答正确率 | 89% |
+| 同等问答任务平均耗时 | ↓ 42% |
+| 事实类错误 | ↓ 67% |
 
-评测（本地固定评测集，样本与脚本暂未随仓库开源）：RAG 召回率 87%、引用匹配准确率 82%、无证据拒答正确率 89%；同等问答任务平均耗时降低 42%，事实类错误下降 67%。
-
-
-
----
-
-## 附：底座文档（Personal Agent）
-
-> 以下为底座本身的能力与文档，科研星舰的改造点见上文。
-
-### 为什么是它
-
-市面上的「个人助理」要么是一个聊天框，关掉就忘；要么能力很强，但你不敢把它接进飞书和微信。Personal Agent 想做的是中间那条路：
-
-- **真的记得你。** 姓名、城市、职业、兴趣、偏好和你随口提过的事，会沉淀成一张可查看、可修改、可遗忘的记忆卡，而不是藏在某个向量库里。
-- **先确认，再行动。** 写草稿、建定时任务、调用外部工具，统统先出确认卡。它不会替你发消息、发邮件、提交表单，也不会在聊天里收你的密码和手机号。
-- **一个账号，多个入口。** 网页会话即账号；飞书、微信通过一次性链接绑定到同一份档案和记忆。
-- **安全护栏是内置的，不是贴上去的。** 出站防泄露、隐私脱敏、危机识别、一次性确认凭证、全链路轨迹日志，都有金标回归测试守着。
-- **拿来就能改。** 模型任意厂商可换，工具一个装饰器就能注册，渠道按接口加，[CONTRIBUTING.md](CONTRIBUTING.md) 按改动深度分五层带你入门。
-
-### 它能做什么
-
-```
-你：我叫小胡，在上海做产品经理，最近在学 Rust。
-助理：记住了。             → 记忆卡：姓名 小胡 · 城市 上海 · 职业 产品经理 · 兴趣 Rust
-
-你：帮我给房东写条消息，说下周三交租要晚两天。
-助理：这是草稿 ……           → 确认卡：确认 / 带修改意见确认 / 拒绝并说明原因（会自动重写）
-
-你：每天早上八点提醒我看一眼 Hacker News 头条。
-助理：要创建这个定时任务吗？ → 确认卡 → 到点结果进应用内收件箱，并推送到已绑定的飞书 / 微信
-
-你：我的支付宝密码是……
-助理：这里不收密码。        → 给你一个网页安全输入区链接，加密保存，从不回显明文
-```
-
-| 做 | 不做 |
-|----|------|
-| 带记忆的对话；记忆卡上随时查看、修改、遗忘 | 替你对外发消息、发邮件、提交表单 |
-| 写作草稿（邮件 / 消息 / 文章 / 笔记）→ 确认卡 → 定稿 | 在聊天里收账号密码、手机号、身份证 |
-| 一次性提醒、自定义只读定时任务 | 登录任何网站、无人值守操作 |
-| 读公开网页 / RSS / 搜索 / Hacker News 作为**不可信**来源 | 把网页内容当成指令执行 |
-| 危机识别与热线兜底、提示词泄露与隐私护栏 | 把你的数据交给第三方可观测平台（Langfuse 可选、自托管、脱敏后导出） |
-
-### 快速开始
+## 快速开始
 
 ### 本地三分钟
 
 需要 Python 3.12。
 
 ```bash
-git clone https://github.com/hubooooooo/Personal-Agent.git && cd Personal-Agent
+git clone https://github.com/DarkHummingbird/research-starship.git && cd research-starship
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -c requirements.lock
 cp .env.example .env
@@ -112,15 +86,17 @@ uvicorn app.main:app --host 0.0.0.0 --port 8787
 ### Docker
 
 ```bash
-docker build -t personal-agent .
-docker run --rm -p 8787:8787 -e AUTH_SECRET=换成随机串 -e KIMI_API_KEY=你的key personal-agent
+docker build -t research-starship .
+docker run --rm -p 8787:8787 -e AUTH_SECRET=换成随机串 -e KIMI_API_KEY=你的key research-starship
 ```
 
 ### Render 一键部署
 
 点上方 **Deploy to Render** 按钮，或在 Render 新建 Blueprint 选本仓库。免费实例没有持久盘，重启会清空 SQLite 数据，正式使用请挂盘。详见 [docs/deploy.md](docs/deploy.md)。
 
-### 工作原理
+## 工作原理
+
+科研链路在 `app/research/`：解析 → 入库审核 → 检索 → 引用核验 → 生成 → 复核，使用方式见 [docs/research-quickstart.md](docs/research-quickstart.md)。下面是整个应用的运行结构：
 
 ```mermaid
 flowchart LR
@@ -155,7 +131,7 @@ flowchart LR
 
 更完整的图和设计取舍：[docs/agent-stack.md](docs/agent-stack.md) · [docs/技术架构.md](docs/技术架构.md)（英文版 [tech-architecture.md](docs/tech-architecture.md)）· Mermaid 源图 [docs/mmd/](docs/mmd/)。
 
-### 多渠道接入
+## 多渠道接入
 
 **两个渠道默认都关。** 所有渠道走同一个网关：入站归一 → 绑定检查 → 隐私拦截 → 同一个 agent thread → 渲染 → 出站。
 
@@ -173,7 +149,7 @@ flowchart LR
 
 细节见 [docs/channels.md](docs/channels.md)。
 
-### 安全与隐私
+## 安全与隐私
 
 这些不是「建议」，而是有测试守着的不变量，改动前请读 [CONTRIBUTING 第 3 节「不要动的东西」](CONTRIBUTING.md#3-不要动的东西)。
 
@@ -186,7 +162,7 @@ flowchart LR
 - **轨迹日志。** 每个图节点一行：输入摘要、工具、参数、结果摘要、耗时、模型档位、token 估算、护栏命中；入库前统一脱敏，用户 / 线程以 HMAC 假名出现。
 - **金标回归。** `tests/golden/` 覆盖安慰、危机、草稿、泄露、轨迹鉴权。安全类必须零失败；质量类与 `baseline.json` 比较。
 
-### 配置
+## 配置
 
 完整键名与注释见 [`.env.example`](.env.example)。**不要提交填好的 `.env`。**
 
@@ -221,7 +197,7 @@ flowchart LR
 
 </details>
 
-### HTTP API
+## HTTP API
 
 <details>
 <summary>接口摘要（点开）</summary>
@@ -248,7 +224,7 @@ flowchart LR
 
 </details>
 
-### 测试
+## 测试
 
 测试永远是 mock 模式：`tests/conftest.py` 会删掉环境里所有 `*_API_KEY` 并禁止加载 `.env`，本地有 Key 也不会花额度。
 
@@ -262,7 +238,7 @@ python scripts/harness_golden.py                                 # CI 门禁入�
 
 接上真实模型后，`python scripts/live_smoke.py` 会把主流程跑一遍并生成 [docs/live-smoke-report.md](docs/live-smoke-report.md)，作为「正常长什么样」的参照。评审 rubric（共情 / 危机处理）：`python -m app.evals.cli`。
 
-### 二次开发
+## 二次开发
 
 [CONTRIBUTING.md](CONTRIBUTING.md) 是给新人的地图，按改动深度分五层，每层标出入口文件、必须同步的契约测试和不能动的安全不变量：
 
@@ -290,7 +266,7 @@ def weather_lookup(city: str, user_id: str = "") -> dict:
 
 可选的领域指导包（Skills）放在 `app/agent/skills/`，只提供文本指导，不授予工具、不改权限，见 [docs/skills.md](docs/skills.md)。
 
-### 文档索引
+## 文档索引
 
 | 主题 | 文档 |
 |------|------|
@@ -303,13 +279,13 @@ def weather_lookup(city: str, user_id: str = "") -> dict:
 | 部署与运维 | [deploy.md](docs/deploy.md) · [postgres-rls.md](docs/postgres-rls.md) · [langfuse.md](docs/langfuse.md) · [admin.md](docs/admin.md) |
 | 界面 | [DESIGN.md](DESIGN.md)（chat-only 单页，浅色，Geist 自托管） |
 
-### 现状与边界
+## 现状与边界
 
 - 当前版本 0.8.2，SQLite 单机即可跑，Postgres + RLS 已可用但未在生产长期验证。
 - QQ 渠道只有接口位；向量记忆、主动调度、两个渠道、Langfuse 全部默认关闭，按需打开。
 - Render 免费实例无持久盘，仅适合演示。
 - 已知粗糙处与常见坑见 [CONTRIBUTING 第 5、6 节](CONTRIBUTING.md#5-已知的粗糙处)。
 
-### License
+## License
 
 [MIT](LICENSE)
