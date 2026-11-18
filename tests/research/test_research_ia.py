@@ -38,8 +38,8 @@ def test_research_page_has_home_and_four_task_workspaces():
     parser = ResearchPageParser()
     parser.feed(html)
 
-    assert parser.views == ["home", "library", "review", "chat", "discussion", "data"]
-    assert parser.nav_targets == ["home", "library", "review", "chat", "discussion", "data"]
+    assert parser.views == ["home", "library", "review", "chat", "writing", "discussion", "data"]
+    assert parser.nav_targets == ["home", "library", "review", "chat", "writing", "discussion", "data"]
     assert len(parser.ids) == len(set(parser.ids))
     assert "latex" not in parser.generation_options
     assert "恢复完整备份" not in html

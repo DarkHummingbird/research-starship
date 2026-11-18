@@ -79,3 +79,22 @@ def test_discussion_includes_work_profile_as_background(client, auth, monkeypatc
     prompt = calls.call_args.kwargs["user"]
     assert "贾东霖" in prompt and "混合检索" in prompt
     assert "仅作背景，不是证据" in prompt
+
+
+def test_discussion_history_persisted_and_separate_from_chat(client, auth, monkeypatch):
+    _configure(monkeypatch)
+    headers = auth("discussion-history-user")
+    project = _project(client, headers)
+    response = client.post(
+        f"/api/research/projects/{project['id']}/discussion",
+        json={"message": "帮我拆问题", "model_id": "deepseek-chat", "query_confidentiality": "L1"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    conversation_id = response.json()["data"]["conversation_id"]
+    messages = client.get(f"/api/research/conversations/{conversation_id}/messages", headers=headers).json()["data"]["items"]
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    conversations = client.get(f"/api/research/projects/{project['id']}/conversations", headers=headers).json()["data"]["items"]
+    assert all(not item["title"].startswith("自由讨论：") for item in conversations)
+    discussions = client.get(f"/api/research/projects/{project['id']}/discussions", headers=headers).json()["data"]["items"]
+    assert len(discussions) == 1

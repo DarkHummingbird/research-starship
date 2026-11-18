@@ -766,7 +766,8 @@ def list_conversations(user_id: str, project_id: str) -> list[dict[str, Any]]:
     with migration_session() as conn:
         _project(conn, user_id, project_id)
         rows = conn.execute(select(store.ResearchConversation).where(
-            store.ResearchConversation.user_id == user_id, store.ResearchConversation.project_id == project_id
+            store.ResearchConversation.user_id == user_id, store.ResearchConversation.project_id == project_id,
+            ~store.ResearchConversation.title.like(DISCUSSION_PREFIX + "%"),
         ).order_by(store.ResearchConversation.created_at.desc())).scalars().all()
         return [store.model_dict(row) for row in rows]
 
@@ -1227,6 +1228,8 @@ def work_profile_fragment(user_id: str, classification: str) -> dict[str, Any] |
     }
 
 
+DISCUSSION_PREFIX = "自由讨论："
+
 DISCUSSION_SYSTEM = ("你是科研工作台中的自由讨论助手，帮助用户理清思路、解释概念、讨论方案。"
                      "你没有查阅用户的资料，不得编造来源、指标或实验结果；需要依据论文内容回答时，提醒用户到课题问答中核验。")
 
@@ -1236,6 +1239,7 @@ def discuss(
     project_id: str,
     *,
     message: str,
+    conversation_id: str | None = None,
     history: list[dict[str, Any]] | None = None,
     model_id: str = "",
     query_confidentiality: str = "L1",
@@ -1249,6 +1253,22 @@ def discuss(
         raise ResearchError(400, "invalid_confidentiality", "保密等级必须为 L1、L2 或 L3")
     with memory_session() as conn:
         _project(conn, user_id, project_id)
+        if conversation_id:
+            conversation = conn.execute(select(store.ResearchConversation).where(
+                store.ResearchConversation.id == conversation_id,
+                store.ResearchConversation.user_id == user_id,
+                store.ResearchConversation.project_id == project_id,
+                store.ResearchConversation.title.like(DISCUSSION_PREFIX + "%"),
+            )).scalar_one_or_none()
+            if conversation is None:
+                raise ResearchError(404, "conversation_not_found", "讨论不存在或不属于当前课题")
+        else:
+            conversation_id = _id("cnv_")
+            conn.add(store.ResearchConversation(
+                id=conversation_id, user_id=user_id, project_id=project_id,
+                title=DISCUSSION_PREFIX + message[:30], created_at=store.utc_now(),
+            ))
+        _save_message(conn, conversation_id, user_id, project_id, "user", message, query_confidentiality, [], "user")
     from app.research.online_generation import generate_online
 
     lines = []
@@ -1273,7 +1293,20 @@ def discuss(
     )
     if result["status"] == "awaiting_outbound_approval":
         return result
-    return {"status": "answered", "answer": result["content"], "model": result["model"]}
+    with memory_session() as conn:
+        _save_message(conn, conversation_id, user_id, project_id, "assistant", result["content"], query_confidentiality, [], result["model"])
+    return {"status": "answered", "answer": result["content"], "model": result["model"], "conversation_id": conversation_id}
+
+
+def list_discussions(user_id: str, project_id: str) -> list[dict[str, Any]]:
+    with migration_session() as conn:
+        _project(conn, user_id, project_id)
+        rows = conn.execute(select(store.ResearchConversation).where(
+            store.ResearchConversation.user_id == user_id,
+            store.ResearchConversation.project_id == project_id,
+            store.ResearchConversation.title.like(DISCUSSION_PREFIX + "%"),
+        ).order_by(store.ResearchConversation.created_at.desc())).scalars().all()
+        return [store.model_dict(row) for row in rows]
 
 
 def security_events(user_id: str, project_id: str, limit: int = 100) -> list[dict[str, Any]]:

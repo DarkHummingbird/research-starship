@@ -91,6 +91,7 @@ class ChatBody(BaseModel):
 
 class DiscussionBody(BaseModel):
     message: str
+    conversation_id: str | None = None
     history: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     model_id: str = ""
     query_confidentiality: Literal["L1", "L2", "L3"] = "L1"
@@ -630,9 +631,15 @@ def index_document(document_id: str, body: IndexDocumentBody, uid: str = Depends
 @router.post("/projects/{project_id}/discussion")
 def discussion(project_id: str, body: DiscussionBody, uid: str = Depends(require_user)):
     return _data(service.discuss(
-        uid, project_id, message=body.message, history=body.history, model_id=body.model_id,
+        uid, project_id, message=body.message, conversation_id=body.conversation_id,
+        history=body.history, model_id=body.model_id,
         query_confidentiality=body.query_confidentiality, task_id=body.task_id, approval_id=body.approval_id,
     ))
+
+
+@router.get("/projects/{project_id}/discussions")
+def discussions(project_id: str, uid: str = Depends(require_user)):
+    return _data({"items": service.list_discussions(uid, project_id)})
 
 
 @router.post("/projects/{project_id}/conversations")
@@ -835,6 +842,11 @@ def create_arxiv_search_task(project_id: str, body: ArxivSearchBody, uid: str = 
 @router.post("/projects/{project_id}/source-tasks/arxiv/import")
 def create_arxiv_import_task(project_id: str, body: ArxivImportBody, uid: str = Depends(require_user)):
     return _source_task(uid, project_id, 'arxiv_import', body)
+
+
+@router.post("/projects/{project_id}/source-tasks/webpage/import")
+def create_webpage_task(project_id: str, body: WebpageImportBody, uid: str = Depends(require_user)):
+    return _source_task(uid, project_id, 'webpage_import', body)
 
 
 @router.post("/projects/{project_id}/source-tasks/github/import")

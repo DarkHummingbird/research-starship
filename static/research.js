@@ -3,6 +3,7 @@ const VIEW_CONTENT = {
   library: ["你的研究资料", "资料库", "导入、阅读并整理当前课题的资料。"],
   review: ["人工确认", "待我确认", "只处理需要核对的内容，确认后才会进入正式课题知识。"],
   chat: ["可信回答", "课题问答", "基于当前课题已确认的资料提问，并回到原文核对。"],
+  writing: ["写作与辅助", "写作与辅助", "论文段落、审稿回复、对比表、邮件通知与实验设想。"],
   discussion: ["自由讨论", "自由讨论", "不读取课题资料，用于头脑风暴、概念解释和方案讨论。"],
   data: ["模型、隐私与数据", "数据与隐私", "统一管理在线模型、本地组件、保密规则、导出和历史版本。"],
 };
@@ -16,6 +17,7 @@ const state = {
   allowAllDocuments: false,
   lastChatBody: null,
   discussion: [],
+  discussionId: "",
   conversationId: "",
   previewTab: "source",
   pendingChat: null,
@@ -623,6 +625,7 @@ async function switchView(view) {
     await loadConversations();
     await restoreConversation();
   }
+  if (view === "discussion" && state.projectId) await loadDiscussions();
   if (view === "data" && state.projectId) {
     await loadGovernance();
     await loadWorkProfile();
@@ -646,6 +649,7 @@ async function selectProject(projectId) {
   if (state.projectId !== projectId) return;
   await loadConversations();
   await restoreConversation();
+  await loadDiscussions();
   if (state.projectId !== projectId) return;
   await window.researchLoadState?.(projectId);
   if (state.projectId === projectId && state.view === "data") await loadGovernance();
@@ -678,10 +682,11 @@ function documentButton(doc) {
 }
 
 function renderDocumentList() {
+  const filter = $("docStatusFilter")?.value || "all";
   const list = $("documentList");
   list.replaceChildren();
   if (!state.documents.length) list.innerHTML = '<p class="empty">暂无资料。上传后只会进入待确认状态。</p>';
-  for (const doc of state.documents) list.append(documentButton(doc));
+  for (const doc of state.documents.filter(item => filter === "all" || item.status === filter)) list.append(documentButton(doc));
 
   const pending = state.documents.filter((doc) => doc.status === "pending");
   const processing = pending.filter(doc => doc.processing_status === "processing" || ["pending", "processing"].includes(doc.analysis_status));
@@ -1301,13 +1306,78 @@ function addMessage(role, content, sources = [], model = "", question = "", quer
     if (index === 0) details.open = true;
     const summary = document.createElement("summary");
     summary.textContent = `来源：${source.title} · ${source.chapter} · 版本 ${source.version} · ${confidentialityLabel(source.confidentiality)}`;
+    summary.addEventListener("click", (event) => {
+      event.preventDefault();
+      showEvidence(source, question);
+    });
     details.append(summary);
     appendCitation(details, source, question);
     article.append(details);
   });
+  if (role === "assistant" && sources.length) showEvidence(sources[0], question);
   if (role === "assistant" && content.trim()) appendNoteSaver(article, content, question, sources, model);
   $("chatLog").append(article);
   $("chatLog").scrollTop = $("chatLog").scrollHeight;
+}
+
+function showEvidence(source, question = "") {
+  const pane = $("evidenceContent");
+  pane.replaceChildren();
+  const title = document.createElement("h4");
+  title.textContent = `${source.title} · ${source.chapter} · v${source.version}`;
+  const quote = document.createElement("blockquote");
+  quote.textContent = source.quote;
+  pane.append(title, quote);
+  if (source.document_id) {
+    const link = document.createElement("a");
+    link.className = "source-file-link";
+    const page = source.locator && source.locator.page;
+    link.href = `/api/research/documents/${source.document_id}/source-file${page ? `#page=${page}` : ""}`;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = page ? `打开原始文件（第 ${page} 页）` : "打开/下载原始文件";
+    pane.append(link);
+  }
+  if (!source.document_id || !source.chunk_id || !source.version || !source.locator?.page) return;
+  const excerpt = citationExcerpt(source.quote, question);
+  if (!excerpt) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "定位并高亮原文";
+  const result = document.createElement("div");
+  result.className = "citation-highlight";
+  result.setAttribute("role", "status");
+  let imageUrl = null;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    result.textContent = "正在定位原文…";
+    try {
+      const response = await fetch(`/api/research/documents/${source.document_id}/highlight`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({expected_version: source.version, chunk_id: source.chunk_id, quote: excerpt}),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail?.message || "定位失败，请直接打开原文核对");
+      }
+      const blob = await response.blob();
+      if (imageUrl) URL.revokeObjectURL(imageUrl);
+      imageUrl = URL.createObjectURL(blob);
+      result.replaceChildren();
+      const caption = document.createElement("p");
+      const note = ["offline_ocr", "deepseek_ocr"].includes(response.headers.get("X-Source-Extraction")) ? "；扫描件按识别行定位，请核对原图" : "";
+      caption.textContent = `已高亮第 ${response.headers.get("X-Source-Page")} 页的所选摘录${note}。`;
+      const image = document.createElement("img");
+      image.alt = "来源原文高亮页面";
+      image.src = imageUrl;
+      const displayedUrl = imageUrl;
+      image.addEventListener("load", () => { URL.revokeObjectURL(displayedUrl); if (imageUrl === displayedUrl) imageUrl = null; }, {once: true});
+      result.append(caption, image);
+    } catch (error) {
+      result.textContent = `${error.message} 请使用原文链接核对。`;
+    } finally { button.disabled = false; }
+  });
+  pane.append(button, result);
 }
 
 function renderClarification(result, body) {
@@ -2186,6 +2256,38 @@ function renderDiscussion() {
   log.scrollTop = log.scrollHeight;
 }
 
+async function loadDiscussions() {
+  if (!state.projectId) return;
+  const result = await api(`/api/research/projects/${state.projectId}/discussions`);
+  const items = result.items || [];
+  if (!items.length) {
+    state.discussion = [];
+    state.discussionId = "";
+    renderDiscussion();
+    return;
+  }
+  await openDiscussion(items[0].id);
+}
+
+async function openDiscussion(id) {
+  const result = await api(`/api/research/conversations/${id}/messages`);
+  state.discussionId = id;
+  state.discussion = (result.items || []).map(item => ({role: item.role, content: item.content}));
+  renderDiscussion();
+}
+
+function appendDiscussionAnswer(text) {
+  state.discussion.push({role: "assistant", content: ""});
+  const index = state.discussion.length - 1;
+  let shown = 0;
+  const timer = setInterval(() => {
+    shown = Math.min(text.length, shown + 24);
+    state.discussion[index].content = text.slice(0, shown);
+    renderDiscussion();
+    if (shown >= text.length) clearInterval(timer);
+  }, 25);
+}
+
 async function sendDiscussion(body) {
   const result = await api(`/api/research/projects/${state.projectId}/discussion`, {method: "POST", body: JSON.stringify(body)});
   if (result.status === "awaiting_outbound_approval") {
@@ -2194,8 +2296,8 @@ async function sendDiscussion(body) {
     });
     return;
   }
-  state.discussion.push({role: "assistant", content: result.answer});
-  renderDiscussion();
+  state.discussionId = result.conversation_id || state.discussionId;
+  appendDiscussionAnswer(result.answer);
 }
 
 $("discussionForm").addEventListener("submit", async (event) => {
@@ -2208,7 +2310,7 @@ $("discussionForm").addEventListener("submit", async (event) => {
   renderDiscussion();
   $("discussionInput").value = "";
   const body = {
-    message, history, model_id: $("discussionModel").value,
+    message, history, conversation_id: state.discussionId || null, model_id: $("discussionModel").value,
     query_confidentiality: $("discussionLevel").value,
   };
   const form = event.currentTarget;
@@ -2324,4 +2426,60 @@ $("scheduleForm").addEventListener("submit", async (event) => {
     $("schedulePrompt").value = "";
     await loadSchedules();
   } catch (error) { toast(error.message); }
+});
+
+for (const button of document.querySelectorAll("[data-home-action]")) {
+  button.addEventListener("click", () => switchView(button.dataset.homeAction).catch((error) => toast(error.message)));
+}
+
+$("newDiscussionButton").addEventListener("click", () => {
+  state.discussion = [];
+  state.discussionId = "";
+  renderDiscussion();
+});
+
+$("discReminderForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  try {
+    await api("/api/schedules", {method: "POST", body: JSON.stringify({
+      name: $("discReminderName").value.trim(),
+      job_kind: "custom_nl",
+      prompt_text: $("discReminderPrompt").value.trim(),
+      trigger: {type: "cron", expr: $("discReminderCron").value.trim()},
+      tz: $("discReminderTz").value.trim() || "Asia/Shanghai",
+      delivery: "in_app", channel_preference: "auto", enabled: true,
+    })});
+    toast("提醒已创建，可在任务中心的“定时与提醒”查看");
+    $("discReminderName").value = "";
+    $("discReminderPrompt").value = "";
+  } catch (error) { toast(error.message); }
+});
+
+$("discWebpageForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.projectId) { toast("请先选择课题"); return; }
+  try {
+    const task = await api(`/api/research/projects/${state.projectId}/source-tasks/webpage/import`, {
+      method: "POST", body: JSON.stringify({url: $("discWebpageUrl").value.trim(), confidentiality: "L1"}),
+    });
+    state.watchingTasks.set(task.id, {origin: "upload"});
+    await refreshTasks();
+    toast("网页已开始导入，完成后请到“待我确认”核对");
+    $("discWebpageUrl").value = "";
+  } catch (error) { toast(error.message); }
+});
+
+$("docStatusFilter").addEventListener("change", renderDocumentList);
+
+$("dataTabSettings").addEventListener("click", () => {
+  $("dataTabSettings").classList.add("active");
+  $("dataTabMine").classList.remove("active");
+  $("dataSettings").hidden = false;
+  $("dataMine").hidden = true;
+});
+$("dataTabMine").addEventListener("click", () => {
+  $("dataTabMine").classList.add("active");
+  $("dataTabSettings").classList.remove("active");
+  $("dataSettings").hidden = true;
+  $("dataMine").hidden = false;
 });

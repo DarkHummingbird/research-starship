@@ -484,3 +484,21 @@ body.no-project #homeView > :not(#nextStepPanel) { display: none; }
 .task-center-tabs { display: flex; gap: 12px; margin: 8px 0 12px; }
 .task-center-tabs button { border: 0; background: none; padding: 6px 0; min-height: 32px; color: var(--muted); }
 .task-center-tabs button.active { color: var(--ink); font-weight: 600; border-bottom: 2px solid currentColor; }
+
+.chat-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.chat-main { min-width: 0; }
+.evidence-pane { border-left: 1px solid var(--line); padding-left: 16px; min-width: 0; }
+.evidence-pane h3 { margin: 0 0 12px; font-size: 15px; }
+.evidence-pane blockquote { max-height: 320px; overflow: auto; }
+.evidence-pane .citation-highlight img { max-width: 100%; height: auto; }
+@media (max-width: 1100px) {
+  .chat-workspace { grid-template-columns: 1fr; }
+  .evidence-pane { border-left: 0; border-top: 1px solid var(--line); padding-top: 16px; padding-left: 0; }
+}
+
+.home-actions { display: flex; gap: 12px; margin: 0 0 18px; }
+.home-details > summary { color: var(--muted); font-size: 14px; }
+
+.data-tabs { display: flex; gap: 12px; margin-bottom: 14px; }
+.data-tabs button { border: 0; background: none; padding: 6px 0; color: var(--muted); }
+.data-tabs button.active { color: var(--ink); font-weight: 600; border-bottom: 2px solid currentColor; }
